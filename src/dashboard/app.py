@@ -1,445 +1,651 @@
+"""FarmTech Fase 7 — painel de integração (executar na raiz com Streamlit)."""
+
 import os
-import sys
+import re
+import math
+from html import escape
 import subprocess
+import sys
 from pathlib import Path
 
-import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-# Diretórios base
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
-CSV_SENSORES = BASE_DIR / "data" / "sensores_farmtech_v2.csv"
-CSV_FAZENDA = BASE_DIR / "data" / "dados_fazenda.csv"
-CAMINHO_LOGO = BASE_DIR / "docs" / "assets" / "logo.png"
-PYTHON_EXEC = sys.executable
 
-# Configuração da página
-st.set_page_config(
-    page_title="FarmTech Solutions — Plataforma Integrada",
-    page_icon="🌱",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "data" / "sensores_farmtech_v2.csv"
+SERVICES = [
+    ("Fase 1 · Manejo de insumos", "fase1_planejamento/manejo_insumos.py", "2\n5\n"),
+    ("Fase 2 · Clima/IoT", "fase2_iot/clima.py", None),
+    ("Fase 3 · Oracle", "fase3_database/ingestao_oracle.py", None),
+    ("Fase 4 · Recomendações", "fase4_ml/recomendacoes.py", None),
+    ("Fase 6 · Visão computacional", "fase6_vision/detector.py", None),
+    ("Fase 7 · Teste local de alertas", "fase7_alerts/mensageria_aws.py", None),
+]
+REQUIRED = {"timestamp", "umidade", "ph", "nitrogenio", "fosforo", "potassio", "chuva", "irrigacao"}
+SENSOR_LABELS = {
+    "umidade": ("💧 Umidade do solo", "%"),
+    "ph": ("🧪 pH do solo", ""),
+    "nitrogenio": ("🌿 Nitrogênio", "mg/kg"),
+    "fosforo": ("🌱 Fósforo", "mg/kg"),
+    "potassio": ("⚡ Potássio", "mg/kg"),
+    "chuva": ("🌧️ Chuva (0/1)", ""),
+    "irrigacao": ("🚰 Irrigação (0/1)", ""),
+}
 
-# Estilização CSS acessível (WCAG AA)
+
+@st.cache_data(ttl=30)
+def read_telemetry(path: str):
+    frame = pd.read_csv(path)
+    missing = REQUIRED.difference(frame.columns)
+    if missing:
+        raise ValueError(f"Colunas ausentes: {', '.join(sorted(missing))}")
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    for column in REQUIRED - {"timestamp"}:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame.dropna(subset=["timestamp"]).sort_values("timestamp")
+
+
+def execute_service(script: Path, stdin: str | None = None):
+    """Executa apenas os módulos conhecidos, com limite de tempo e saída capturada."""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)], input=stdin, text=True,
+            capture_output=True, cwd=ROOT, timeout=25,
+            env={**os.environ, "PYTHONPATH": str(ROOT)},
+        )
+        return result.returncode, (result.stdout + "\n" + result.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return -1, "Tempo limite de 25 segundos atingido. Execute esse módulo pelo terminal para investigar."
+    except OSError as exc:
+        return -1, f"Falha ao iniciar: {exc}"
+
+
+def execute_r(script: Path):
+    try:
+        result = subprocess.run(["Rscript", str(script)], capture_output=True, text=True,
+                                cwd=ROOT, timeout=25)
+        return result.returncode, (result.stdout + "\n" + result.stderr).strip()
+    except FileNotFoundError:
+        return -1, "Rscript não está instalado ou não está disponível no PATH."
+    except subprocess.TimeoutExpired:
+        return -1, "Execução R excedeu 25 segundos."
+
+
+st.set_page_config(page_title="FarmTech | Central Integrada", page_icon="🌱", layout="wide")
+with st.sidebar:
+    st.markdown("### 🎨 Aparência")
+    theme_name = st.radio("Tema da plataforma", ["Azul-marinho", "Escuro", "Claro"],
+                          horizontal=False, key="farmtech_theme")
+
+PALETTES = {
+    "Azul-marinho": {"bg": "#0b1730", "surface": "#142642", "sidebar": "#101f39",
+                    "border": "#294365", "text": "#eaf3ff", "muted": "#adc4df", "accent": "#59b8ff",
+                    "control": "#1b3457", "log": "#203c62"},
+    "Escuro": {"bg": "#10151d", "surface": "#1c2631", "sidebar": "#151d27",
+               "border": "#354353", "text": "#f2f5f9", "muted": "#b6c4d3", "accent": "#5ce0ac",
+               "control": "#273543", "log": "#304151"},
+    "Claro": {"bg": "#f2f7fb", "surface": "#ffffff", "sidebar": "#e7f0f9",
+              "border": "#ccdae8", "text": "#18304d", "muted": "#506985", "accent": "#146bad",
+              "control": "#ffffff", "log": "#f1f6fa"},
+}
+palette = PALETTES[theme_name]
+px.defaults.template = "plotly_white" if theme_name == "Claro" else "plotly_dark"
+px.defaults.color_discrete_sequence = (["#146bad", "#249a7f", "#df953f"] if theme_name == "Claro"
+                                       else [palette["accent"], "#40c9a2", "#d9a451"])
+
+
+def notice(message, kind="info"):
+    """Aviso próprio: contraste independente dos estilos de alerta do Streamlit."""
+    icons = {"info": "ℹ️", "warning": "⚠️", "success": "✅", "error": "⛔"}
+    colors = {"info": "#328acb", "warning": "#db922b", "success": "#21996d", "error": "#d45959"}
+    st.markdown(
+        f'<div class="ft-notice" style="border-left-color:{colors[kind]} !important">'
+        f'<span class="ft-notice-icon">{icons[kind]}</span>'
+        f'<span class="ft-notice-text">{escape(str(message))}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def themed_table(frame):
+    """Tabela com fundo/contraste controlados pelo tema, sem canvas externo."""
+    markup = frame.to_html(index=False, border=0, classes="ft-table", escape=True)
+    st.markdown(f'<div class="ft-table-wrap">{markup}</div>', unsafe_allow_html=True)
+
+
+def themed_log(output):
+    # O componente nativo preserva precisamente as quebras de linha do terminal.
+    st.code(output or "Sem saída textual.", language="text")
+
+
+def themed_chart(fig):
+    """Aplica tema completo ao Plotly (o template não cobre o fundo de todos os gráficos)."""
+    fig.update_layout(
+        paper_bgcolor=palette["surface"], plot_bgcolor=palette["surface"],
+        font=dict(color=palette["text"]),
+        title_font=dict(color=palette["text"]),
+        legend=dict(font=dict(color=palette["text"])),
+        margin=dict(l=30, r=25, t=55, b=35),
+    )
+    fig.update_xaxes(gridcolor=palette["border"], linecolor=palette["border"],
+                     tickfont=dict(color=palette["muted"]), title_font=dict(color=palette["muted"]))
+    fig.update_yaxes(gridcolor=palette["border"], linecolor=palette["border"],
+                     tickfont=dict(color=palette["muted"]), title_font=dict(color=palette["muted"]))
+    st.plotly_chart(fig, use_container_width=True)
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        color: #1F2933;
-    }
-
-    /* Container Principal */
-    .main {
-        background-color: #F7FAF5;
-    }
-
-    /* Hero / Cabeçalho */
-    .hero-container {
-        background: #FFFFFF;
-        border: 1px solid #D6E2CE;
-        border-radius: 14px;
-        padding: 24px 28px;
-        margin-bottom: 24px;
-        box-shadow: 0 2px 6px rgba(46, 125, 50, 0.04);
-    }
-    .hero-badge {
-        display: inline-block;
-        background: #EAF2E3;
-        color: #2E7D32;
-        border: 1px solid #C5DCBA;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        padding: 4px 12px;
-        border-radius: 9999px;
-        margin-bottom: 8px;
-    }
-    .hero-title {
-        font-size: 2.1rem;
-        font-weight: 800;
-        color: #1F2933;
-        margin: 0;
-        line-height: 1.2;
-    }
-    .hero-title span {
-        color: #2E7D32;
-    }
-    .hero-desc {
-        color: #52606D;
-        font-size: 0.95rem;
-        margin-top: 6px;
-        margin-bottom: 0;
-    }
-
-    /* Cards de Métricas */
-    .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #D6E2CE;
-        border-radius: 12px;
-        padding: 16px;
-        text-align: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-    .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(46, 125, 50, 0.08);
-    }
-    .metric-val {
-        font-size: 1.7rem;
-        font-weight: 800;
-        color: #2E7D32;
-        margin-top: 4px;
-    }
-    .metric-lbl {
-        font-size: 0.82rem;
-        font-weight: 600;
-        color: #52606D;
-        letter-spacing: 0.02em;
-    }
-
-    /* Status Semânticos Acessíveis */
-    .status-badge-on {
-        background: #EAF2E3;
-        border: 1px solid #2E7D32;
-        color: #2E7D32;
-        padding: 8px 16px;
-        border-radius: 8px;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .status-badge-off {
-        background: #FDF2F2;
-        border: 1px solid #B3261E;
-        color: #B3261E;
-        padding: 8px 16px;
-        border-radius: 8px;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-
-    /* Botões */
-    div.stButton > button {
-        background-color: #2E7D32;
-        color: #FFFFFF;
-        font-weight: 600;
-        border-radius: 8px;
-        border: none;
-        padding: 8px 18px;
-        transition: background-color 0.2s ease;
-    }
-    div.stButton > button:hover {
-        background-color: #236327;
-        color: #FFFFFF;
-    }
+div[data-testid="stMetric"] {border-radius:14px; padding:16px 18px;}
+div[data-testid="stExpander"] {border-radius:14px;}
+.service-title {font-weight:700; font-size:1.05rem;}
+.ft-intro {padding:22px 26px; border-radius:18px; margin:8px 0 24px;}
+.ft-intro h1 {font-size:2.25rem; font-weight:850; margin:0 0 8px;}
+.ft-intro p {margin:0; font-size:0.95rem;}
+.ft-notice {display:flex;align-items:flex-start;gap:12px;margin:10px 0 14px;
+  padding:15px 18px;border-left:5px solid;border-radius:11px;line-height:1.55;}
+.ft-notice-icon {flex:none;font-size:1.05rem;}
+.ft-notice-text {font-size:0.94rem;font-weight:500;overflow-wrap:anywhere;}
+.ft-table-wrap {overflow:auto;max-height:470px;margin:12px 0 18px;border-radius:12px;}
+.ft-table {border-collapse:collapse;width:100%;font-size:0.9rem;}
+.ft-table th,.ft-table td {padding:11px 14px;text-align:left;white-space:nowrap;}
+</style>
+""", unsafe_allow_html=True)
+st.markdown(f"""
+<style>
+:root {{
+  --ft-bg:{palette['bg']}; --ft-surface:{palette['surface']};
+  --ft-sidebar:{palette['sidebar']}; --ft-border:{palette['border']};
+  --ft-text:{palette['text']}; --ft-muted:{palette['muted']};
+  --ft-accent:{palette['accent']};
+  --ft-control:{palette['control']}; --ft-log:{palette['log']};
+}}
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {{
+  background-color:var(--ft-bg) !important; color:var(--ft-text) !important;
+}}
+[data-testid="stSidebar"], [data-testid="stSidebar"] > div {{
+  background-color:var(--ft-sidebar) !important;
+}}
+[data-testid="stHeader"], [data-testid="stToolbar"],
+[data-testid="stDecoration"] {{background:var(--ft-bg) !important;}}
+.stApp h1,.stApp h2,.stApp h3,.stApp h4,
+.stApp p,.stApp label {{color:var(--ft-text);}}
+.stApp [data-testid="stCaptionContainer"],
+.stApp [data-testid="stCaptionContainer"] *,
+.stApp small {{color:var(--ft-muted) !important; opacity:1 !important;}}
+[data-testid="stMetric"], [data-testid="stExpander"] {{
+  background:var(--ft-surface) !important;
+  border:1px solid var(--ft-border) !important;
+  box-shadow:0 4px 14px rgba(0,0,0,0.055) !important;
+}}
+[data-testid="stMetric"] {{border-radius:14px !important; padding:16px 18px !important;}}
+[data-testid="stMetricLabel"] *, [data-testid="stMetricLabel"] {{color:var(--ft-muted) !important;}}
+[data-testid="stMetricValue"] *, [data-testid="stMetricValue"] {{color:var(--ft-text) !important;}}
+.service-title {{color:var(--ft-accent) !important;}}
+.ft-intro {{background:linear-gradient(125deg,var(--ft-surface),var(--ft-sidebar)) !important;
+  border:1px solid var(--ft-border) !important;}}
+.ft-intro h1 {{color:var(--ft-text) !important;}}
+.ft-intro p {{color:var(--ft-muted) !important;}}
+.ft-notice {{background:var(--ft-surface) !important;border-top:1px solid var(--ft-border);
+  border-right:1px solid var(--ft-border);border-bottom:1px solid var(--ft-border);}}
+.ft-notice .ft-notice-text {{color:var(--ft-text) !important;opacity:1 !important;}}
+.ft-table-wrap {{background:var(--ft-surface);border:1px solid var(--ft-border);}}
+.ft-table th {{background:var(--ft-control) !important;color:var(--ft-text) !important;
+  position:sticky;top:0;z-index:1;}}
+.ft-table td {{background:var(--ft-surface) !important;color:var(--ft-text) !important;
+  border-top:1px solid var(--ft-border);}}
+.ft-table tr:hover td {{background:var(--ft-control) !important;}}
+[data-testid="stTabs"] button {{color:var(--ft-muted) !important;}}
+[data-testid="stTabs"] button[aria-selected="true"] {{color:var(--ft-accent) !important;}}
+[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{background-color:var(--ft-accent) !important;}}
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] details > summary,
+[data-testid="stExpander"] [data-testid="stExpanderToggleIcon"] {{
+  background-color:var(--ft-control) !important;
+  color:var(--ft-text) !important;
+}}
+[data-testid="stExpander"] summary *,
+[data-testid="stExpander"] summary p {{color:var(--ft-text) !important;}}
+[data-baseweb="select"], [data-baseweb="select"] > div,
+[data-baseweb="select"] > div > div,
+[data-baseweb="select"] [role="combobox"],
+[data-baseweb="input"], [data-baseweb="input"] > div,
+[data-baseweb="textarea"], [data-baseweb="textarea"] > div,
+.stApp input, .stApp textarea,
+.stApp [data-testid="stTextInput"] input,
+.stApp [data-testid="stTextArea"] textarea {{
+  background-color:var(--ft-control) !important;
+  color:var(--ft-text) !important;
+  border-color:var(--ft-border) !important;
+  -webkit-text-fill-color:var(--ft-text) !important;
+}}
+.stApp input::placeholder, .stApp textarea::placeholder {{
+  color:var(--ft-muted) !important;
+  -webkit-text-fill-color:var(--ft-muted) !important;
+}}
+[data-baseweb="select"] span, [data-baseweb="select"] svg,
+[data-baseweb="select"] input, [data-baseweb="textarea"] textarea {{
+  color:var(--ft-text) !important;
+}}
+.stApp [data-testid="stForm"] {{
+  background-color:var(--ft-surface) !important;
+  border:1px solid var(--ft-border) !important;
+  border-radius:14px !important;
+  padding:18px !important;
+}}
+.stApp [data-testid="stFormSubmitButton"] button,
+.stApp [data-testid="stButton"] button {{
+  background-color:var(--ft-control) !important;
+  border-color:var(--ft-border) !important;
+  color:var(--ft-text) !important;
+}}
+.stApp [data-testid="stFormSubmitButton"] button *,
+.stApp [data-testid="stButton"] button * {{color:var(--ft-text) !important;}}
+.stApp [data-testid="stButton"] button[kind="primary"],
+.stApp [data-testid="stFormSubmitButton"] button[kind="primary"] {{
+  background-color:var(--ft-accent) !important;
+  border-color:var(--ft-accent) !important;
+  color:{'#ffffff' if theme_name == 'Claro' else '#071724'} !important;
+}}
+.stApp [data-testid="stButton"] button[kind="primary"] *,
+.stApp [data-testid="stFormSubmitButton"] button[kind="primary"] * {{
+  color:{'#ffffff' if theme_name == 'Claro' else '#071724'} !important;
+}}
+[data-testid="stAlert"] {{
+  background-color:var(--ft-surface) !important;
+  border:1px solid var(--ft-border) !important;
+  border-left:5px solid var(--ft-accent) !important;
+  border-radius:10px !important;
+}}
+[data-testid="stAlert"] *,
+[data-testid="stAlert"] p,
+[data-testid="stAlert"] span,
+[data-testid="stAlert"] strong {{
+  color:var(--ft-text) !important;
+  opacity:1 !important;
+}}
+[data-testid="stAlert"] svg {{color:var(--ft-accent) !important;}}
+[data-testid="stSidebar"] [data-testid="stImage"] {{
+  background:#f6fafc !important;
+  padding:10px !important;
+  border-radius:12px !important;
+}}
+[data-testid="stDataFrame"] {{border:1px solid var(--ft-border);border-radius:10px;}}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─── FUNÇÕES DE CARREGAMENTO ──────────────────────────────────────────────────
-@st.cache_data
-def carregar_telemetria():
-    if CSV_SENSORES.exists():
-        return pd.read_csv(CSV_SENSORES, parse_dates=["timestamp"])
-    return pd.DataFrame()
+def show_service_result(rel_path: str, code: int, output: str):
+    """Apresenta um resultado legível e preserva a saída técnica para auditoria."""
+    if code != 0:
+        notice(f"O serviço terminou com erro (código {code}).", "error")
+        if output:
+            themed_log(output)
+        return
+
+    notice("Processamento concluído", "success")
+    if "fase1_planejamento" in rel_path:
+        file = ROOT / "data/dados_fazenda.csv"
+        if file.exists():
+            table = pd.read_csv(file)
+            a, b, c = st.columns(3)
+            a.metric("Culturas cadastradas", len(table))
+            b.metric("Área total", f"{table['Area_m2'].sum():,.1f} m²")
+            c.metric("Insumos previstos", f"{table['Insumo_L'].sum():,.1f} L")
+            themed_table(table.rename(columns={"Cultura":"Cultura", "Area_m2":"Área (m²)",
+                                              "Insumo_L":"Insumo (L)"}))
+            if not table.empty:
+                themed_chart(px.bar(table, x="Cultura", y="Insumo_L", color="Cultura",
+                                    title="Insumos por cultura (L)"))
+        else:
+            notice("Relatório executado; CSV de culturas ainda não encontrado para visualização.")
+    elif "fase3_database" in rel_path:
+        notice("Este módulo pode validar apenas o CSV local. Confira no log se a conexão Oracle foi realmente estabelecida.")
+        if DATA.exists():
+            table = read_telemetry(str(DATA))
+            a, b, c = st.columns(3)
+            a.metric("Registros locais", len(table))
+            b.metric("Umidade média", f"{table['umidade'].mean():.1f}%")
+            c.metric("Acionamentos registrados", int(table["irrigacao"].sum()))
+        if "Conectado ao Oracle" in output:
+            notice("O script informou conexão com o Oracle.", "success")
+        else:
+            notice("Conexão real ao Oracle não confirmada nesta execução.", "warning")
+    elif "fase4_ml" in rel_path:
+        lines = [line.strip().lstrip("• ") for line in output.splitlines()
+                 if line.strip().startswith(("•", "✅", "⚠️", "💧", "🧪", "🌿", "🌧️"))]
+        if lines:
+            st.subheader("Recomendações do serviço")
+            for line in lines:
+                notice(line)
+        else:
+            st.write("A saída do módulo está disponível no log técnico.")
+        st.caption("O módulo atual utiliza regras agronômicas, não inferência de modelo treinado.")
+    elif "fase6_vision" in rel_path:
+        results = re.findall(r"Classe:\s*(\S+)\s*\|\s*Confiança:\s*([\d.,]+)%", output)
+        if results:
+            st.subheader("Objetos identificados")
+            table = pd.DataFrame(results, columns=["Classe", "Confiança (%)"])
+            table["Confiança (%)"] = table["Confiança (%)"].str.replace(",", ".").astype(float)
+            a, b = st.columns(2)
+            a.metric("Detecções apresentadas", len(table))
+            b.metric("Maior confiança", f"{table['Confiança (%)'].max():.1f}%")
+            themed_table(table)
+            themed_chart(px.bar(table, x="Classe", y="Confiança (%)", color="Classe",
+                                range_y=[0, 100], title="Confiança por detecção"))
+        else:
+            notice("O serviço não retornou detecções no formato esperado.")
+        notice("O detector.py recebido gera detecções simuladas; não é inferência YOLO real.", "warning")
+    elif "fase7_alerts" in rel_path:
+        if "Alerta publicado com sucesso no Amazon SNS" in output:
+            notice("O serviço informou publicação no SNS. Confirme o recebimento no destino.", "success")
+        else:
+            notice("Não há confirmação de publicação real: resultado local ou simulado.", "warning")
+        st.caption("Publicação no SNS e entrega efetiva de e-mail/SMS são etapas diferentes.")
+    else:
+        st.subheader("Resumo da execução")
+        meaningful = [line.strip() for line in output.splitlines()
+                      if line.strip() and not line.strip().startswith(("=", "-"))]
+        for line in meaningful[:12]:
+            st.write("•", line)
+        if not meaningful:
+            notice("Serviço concluído sem mensagens para exibir.")
+
+    if st.checkbox("🔎 Mostrar log técnico completo", key=f"log_{rel_path}"):
+        themed_log(output)
 
 
-@st.cache_data
-def carregar_fazenda():
-    if CSV_FAZENDA.exists():
-        return pd.read_csv(CSV_FAZENDA)
-    return pd.DataFrame()
-
-
-df_sensores = carregar_telemetria()
-df_fazenda = carregar_fazenda()
-
-# ─── CABEÇALHO / HERO ─────────────────────────────────────────────────────────
 st.markdown("""
-<div class="hero-container">
-    <div class="hero-badge">Plataforma Integrada · FIAP Inteligência Artificial</div>
-    <h1 class="hero-title">Farm<span>Tech</span> Solutions</h1>
-    <p class="hero-desc">Hub Central de Gestão Agrícola: Integração de IoT de Borda, Banco Corporativo, IA Preditiva, Visão Computacional e Nuvem AWS</p>
+<div class="ft-intro">
+  <h1>🌱 FarmTech Solutions</h1>
+  <p>Central agrícola integrada · Sensores, planejamento, análise de cenários e serviços · FIAP Fase 7</p>
 </div>
 """, unsafe_allow_html=True)
-
-# ─── BARRA LATERAL (SIDEBAR) ──────────────────────────────────────────────────
+st.caption("Versão da dashboard: F7-20261108-R11 · logs nativos · caminho legível")
 with st.sidebar:
-    if CAMINHO_LOGO.exists():
-        st.image(str(CAMINHO_LOGO), width=180)
+    logo = ROOT / "docs/assets/logo.png"
+    if logo.exists():
+        st.image(str(logo), width=160)
     else:
-        st.markdown("### 🌱 FarmTech")
-    st.markdown("### Navegação da Plataforma")
-    st.info("Sistema unificado consolidando as Fases 1 a 7 do projeto acadêmico.")
-    
-    st.markdown("---")
-    st.markdown("#### Parâmetros de Cultura")
-    st.write("☕ **Cultura Principal:** Café (*Coffea arabica*)")
-    st.write("🌱 **Cultura Secundária:** Soja")
-    st.write("📍 **Localização:** Região Sudeste (SP)")
+        st.title("🌱 FarmTech")
+    st.markdown("### Plataforma integrada")
+    st.write("**Culturas de estudo:** café e soja")
+    st.caption("Projeto acadêmico FIAP · Fase 7")
+    st.divider()
+    notice("Os sensores exibem dados históricos locais até a integração IoT definitiva.")
 
-    st.markdown("---")
-    st.caption("FarmTech Solutions © 2026\nLicença MIT · Acessibilidade WCAG AA")
-
-
-# ─── ABAS PRINCIPAIS DO SISTEMA ───────────────────────────────────────────────
-tab_painel, tab_fase1, tab_iot, tab_ml, tab_visao, tab_aws = st.tabs([
-    "📊 Resumo Operacional",
-    "📐 Fase 1: Manejo & Insumos",
-    "🔌 Fases 2 e 3: IoT & Banco",
-    "🤖 Fase 4: IA Preditiva",
-    "📷 Fase 6: Visão Computacional",
-    "🚨 Fase 7: Alertas Cloud AWS"
+tab_data, tab_farm, tab_sim, tab_services, tab_alerts = st.tabs([
+    "📊 Sensores", "🌾 Planejamento", "🧪 Simular cenários", "⚙️ Serviços", "🚨 Alertas"
 ])
 
-
-# ─── ABA 1: RESUMO OPERACIONAL (CARDS E TELEMETRIA) ───────────────────────────
-with tab_painel:
-    st.markdown("### 📡 Indicadores de Campo em Tempo Real")
-    st.caption("Visão sintética das condições agronômicas da lavoura de café.")
-
-    if not df_sensores.empty:
-        ultimo = df_sensores.iloc[-1]
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        
-        with c1:
-            st.markdown(f'<div class="metric-card"><div class="metric-lbl">💧 Umidade Solo</div><div class="metric-val">{ultimo["umidade"]:.1f}%</div></div>', unsafe_allow_html=True)
-        with c2:
-            st.markdown(f'<div class="metric-card"><div class="metric-lbl">🧪 pH do Solo</div><div class="metric-val">{ultimo["ph"]:.1f}</div></div>', unsafe_allow_html=True)
-        with c3:
-            st.markdown(f'<div class="metric-card"><div class="metric-lbl">🌿 Nitrogênio (N)</div><div class="metric-val">{ultimo["nitrogenio"]:.0f} <span style="font-size:0.9rem;">mg/kg</span></div></div>', unsafe_allow_html=True)
-        with c4:
-            st.markdown(f'<div class="metric-card"><div class="metric-lbl">🔬 Fósforo (P)</div><div class="metric-val">{ultimo["fosforo"]:.0f} <span style="font-size:0.9rem;">mg/kg</span></div></div>', unsafe_allow_html=True)
-        with c5:
-            st.markdown(f'<div class="metric-card"><div class="metric-lbl">⚡ Potássio (K)</div><div class="metric-val">{ultimo["potassio"]:.0f} <span style="font-size:0.9rem;">mg/kg</span></div></div>', unsafe_allow_html=True)
-        with c6:
-            status_bomba = "LIGADA" if ultimo["irrigacao"] == 1 else "DESLIGADA"
-            classe_bomba = "status-badge-on" if ultimo["irrigacao"] == 1 else "status-badge-off"
-            icone_bomba = "🚿" if ultimo["irrigacao"] == 1 else "🛑"
-            st.markdown(f'<div class="metric-card"><div class="metric-lbl">Bomba de Irrigação</div><div style="margin-top:8px;"><span class="{classe_bomba}">{icone_bomba} {status_bomba}</span></div></div>', unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        col_graf1, col_graf2 = st.columns([2, 1])
-        with col_graf1:
-            # Gráfico de série temporal com cores amigáveis
-            fig_hist = px.line(
-                df_sensores, x="timestamp", y=["umidade", "ph"],
-                title="Série Histórica — Umidade e pH do Solo",
-                color_discrete_map={"umidade": "#1565C0", "ph": "#2E7D32"},
-                labels={"value": "Medição", "timestamp": "Horário", "variable": "Parâmetro"}
-            )
-            fig_hist.update_layout(
-                paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
-                font=dict(family="Inter", color="#1F2933"),
-                legend=dict(orientation="h", y=1.1)
-            )
-            fig_hist.update_xaxes(showgrid=True, gridcolor="#EAF2E3")
-            fig_hist.update_yaxes(showgrid=True, gridcolor="#EAF2E3")
-            st.plotly_chart(fig_hist, width="stretch")
-
-        with col_graf2:
-            irrigando = int(df_sensores["irrigacao"].sum())
-            inativo = len(df_sensores) - irrigando
-            fig_pie = go.Figure(go.Pie(
-                labels=["Bomba Ligada", "Bomba Desligada"],
-                values=[irrigando, inativo],
-                hole=0.55,
-                marker_colors=["#2E7D32", "#C2571A"]
-            ))
-            fig_pie.update_layout(
-                title="Ativação do Sistema de Irrigação",
-                paper_bgcolor="#FFFFFF",
-                font=dict(family="Inter", color="#1F2933")
-            )
-            st.plotly_chart(fig_pie, width="stretch")
+with tab_data:
+    if not DATA.is_file():
+        notice(f"Aguardando arquivo de telemetria: {DATA.relative_to(ROOT)}", "warning")
     else:
-        st.warning("Arquivo de telemetria não encontrado em `data/sensores_farmtech_v2.csv`.")
-
-
-# ─── ABA 2: FASE 1 — MANEJO DE INSUMOS & GEOMETRIA ────────────────────────────
-with tab_fase1:
-    st.markdown("### 📐 Fase 1: Planejamento Agrícola & Manejo de Insumos")
-    st.write("Cálculo geométrico de área plantada e dimensionamento volumétrico de insumos em Python e R.")
-
-    col_calc, col_dados = st.columns([1, 1])
-
-    with col_calc:
-        st.markdown("#### Calculadora Interativa de Campo")
-        cultura_sel = st.selectbox("Selecione a Cultura:", ["Café (Geometria Retangular)", "Soja (Pivô Central Circular)"])
-        
-        if "Café" in cultura_sel:
-            c_comp = st.number_input("Comprimento da Lavoura (metros):", min_value=10.0, value=100.0, step=10.0)
-            c_larg = st.number_input("Largura da Lavoura (metros):", min_value=10.0, value=50.0, step=10.0)
-            c_ruas = st.number_input("Número de Ruas de Plantio:", min_value=1, value=25, step=1)
-            c_dose = st.number_input("Dosagem de Fosfato (mL por metro linear):", min_value=1.0, value=100.0, step=10.0)
-            
-            area_calc = c_comp * c_larg
-            insumo_calc = (c_comp * c_ruas * c_dose) / 1000.0
-            
-            st.success(f"**Área Total:** {area_calc:,.2f} m² | **Demanda de Fosfato:** {insumo_calc:,.2f} Litros")
-        else:
-            c_raio = st.number_input("Raio do Pivô Central (metros):", min_value=10.0, value=80.0, step=5.0)
-            c_dose_m2 = st.number_input("Dosagem de Defensivo (mL por m²):", min_value=0.1, value=50.0, step=5.0)
-            
-            import math
-            area_calc = math.pi * (c_raio ** 2)
-            insumo_calc = (area_calc * c_dose_m2) / 1000.0
-            
-            st.success(f"**Área do Pivô:** {area_calc:,.2f} m² | **Demanda de Defensivo:** {insumo_calc:,.2f} Litros")
-
-    with col_dados:
-        st.markdown("#### Histórico de Talhões Cadastrados (`data/dados_fazenda.csv`)")
-        if not df_fazenda.empty:
-            st.dataframe(df_fazenda, width="stretch", hide_index=True)
-        else:
-            st.info("Nenhum talhão cadastrado no arquivo CSV.")
-
-        st.markdown("#### Disparo dos Scripts via Terminal")
-        c_btn1, c_btn2 = st.columns(2)
-        with c_btn1:
-            if st.button("▶️ Rodar Relatório Python (Fase 1)"):
-                with st.spinner("Executando módulo Python..."):
-                    cmd = [PYTHON_EXEC, str(BASE_DIR / "src" / "fase1_planejamento" / "manejo_insumos.py")]
-                    res = subprocess.run(cmd, input="2\n5\n", capture_output=True, text=True)
-                    st.code(res.stdout, language="text")
-        with c_btn2:
-            if st.button("▶️ Rodar Pipeline R (Fase 1)"):
-                with st.spinner("Executando script R..."):
-                    cmd = ["Rscript", str(BASE_DIR / "src" / "fase1_planejamento" / "analise_estatistica.R")]
-                    try:
-                        res = subprocess.run(cmd, capture_output=True, text=True)
-                        st.code(res.stdout if res.stdout else res.stderr, language="text")
-                    except Exception as e:
-                        st.warning(f"Rscript não encontrado localmente: {e}. O script está salvo em src/fase1_planejamento/.")
-
-
-# ─── ABA 3: FASES 2 E 3 — IOT, CLIMA E BANCO ORACLE ───────────────────────────
-with tab_iot:
-    st.markdown("### 🔌 Fases 2 e 3: Sensoriamento IoT e Banco de Dados")
-    st.write("Integração do microcontrolador ESP32 com telemetria climática e persistência corporativa Oracle.")
-
-    c_iot1, c_iot2 = st.columns(2)
-
-    with c_iot1:
-        st.markdown("#### Monitoramento Meteorológico (OpenWeather API)")
-        st.caption("Consome a API de clima e define se a irrigação deve ser suspensa.")
-        if st.button("☁️ Consultar Previsão Climática em Tempo Real"):
-            with st.spinner("Consultando OpenWeather..."):
-                cmd = [PYTHON_EXEC, str(BASE_DIR / "src" / "fase2_iot" / "clima.py")]
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                st.code(res.stdout, language="text")
-
-    with c_iot2:
-        st.markdown("#### Banco de Dados Oracle FIAP (`SENSORES_FARMTECH_IOT`)")
-        st.caption("Validação de integridade e ingestão de telemetria no banco relacional.")
-        if st.button("🗄️ Testar Conexão e Carga Oracle"):
-            with st.spinner("Conectando ao Oracle Database..."):
-                cmd = [PYTHON_EXEC, str(BASE_DIR / "src" / "fase3_database" / "ingestao_oracle.py")]
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                st.code(res.stdout, language="text")
-
-
-# ─── ABA 4: FASE 4 — IA PREDITIVA E RECOMENDAÇÕES AGRONÔMICAS ─────────────────
-with tab_ml:
-    st.markdown("### 🤖 Fase 4: Inteligência Preditiva e Recomendações de Manejo")
-    st.write("Simulador de condições de solo que aplica regras agronômicas para tomada de decisão em tempo real.")
-
-    col_sim, col_rec = st.columns([1, 1])
-
-    with col_sim:
-        st.markdown("#### 🧪 Simulador de Cenários de Solo (*What-If*)")
-        sim_umidade = st.slider("Umidade do Solo (%):", min_value=10.0, max_value=95.0, value=52.0, step=1.0)
-        sim_ph = st.slider("pH do Solo:", min_value=4.0, max_value=9.0, value=5.8, step=0.1)
-        sim_n = st.slider("Nitrogênio - N (mg/kg):", min_value=10.0, max_value=150.0, value=70.0, step=5.0)
-        sim_p = st.slider("Fósforo - P (mg/kg):", min_value=5.0, max_value=80.0, value=25.0, step=1.0)
-        sim_k = st.slider("Potássio - K (mg/kg):", min_value=20.0, max_value=200.0, value=85.0, step=5.0)
-        sim_chuva = st.radio("Previsão de Chuva:", [0, 1], format_func=lambda x: "🌧️ Chuva Prevista" if x == 1 else "☀️ Sem Chuva", horizontal=True)
-
-    with col_rec:
-        st.markdown("#### 📋 Ações Corretivas Geradas pela IA")
-        from src.fase4_ml.recomendacoes import gerar_recomendacoes_agronomicas
-        
-        acoes = gerar_recomendacoes_agronomicas(sim_umidade, sim_ph, sim_n, sim_p, sim_k, sim_chuva)
-        for a in acoes:
-            if "IRRIGAR IMEDIATAMENTE" in a or "excessivamente ácido" in a or "deficiência" in a:
-                st.warning(a)
-            elif "SUSPENDER" in a or "NÃO IRRIGAR" in a:
-                st.error(a)
+        try:
+            df = read_telemetry(str(DATA))
+            if df.empty:
+                notice("CSV sem registros com datas válidas.", "warning")
             else:
-                st.success(a)
+                last = df.iloc[-1]
+                st.subheader("📡 Visão operacional da lavoura")
+                a, b, c, d = st.columns(4)
+                a.metric("Umidade", f"{last['umidade']:.1f}%")
+                b.metric("pH", f"{last['ph']:.2f}")
+                c.metric("Irrigação", "Ligada" if last["irrigacao"] == 1 else "Desligada")
+                d.metric("Registros", len(df))
 
+                e, f, g = st.columns(3)
+                e.metric("Nitrogênio", f"{last['nitrogenio']:.1f} mg/kg")
+                f.metric("Fósforo", f"{last['fosforo']:.1f} mg/kg")
+                g.metric("Potássio", f"{last['potassio']:.1f} mg/kg")
 
-# ─── ABA 5: FASE 6 — VISÃO COMPUTACIONAL (YOLO) ──────────────────────────────
-with tab_visao:
-    st.markdown("### 📷 Fase 6: Diagnóstico Visual de Objetos e Insumos (YOLOv5)")
-    st.write("Detecção automatizada de recipientes de defensivos (`garrafa`) e ferramentas de coleta (`caneca`).")
+                updated_at = last["timestamp"].strftime("%d/%m/%Y às %H:%M")
+                start_at = df["timestamp"].iloc[0].strftime("%d/%m/%Y")
+                st.caption(f"Última leitura do arquivo: **{updated_at}** · Histórico desde {start_at} · Fonte: CSV local")
+                notice("Os indicadores refletem o arquivo histórico disponível, não leituras ao vivo do ESP32.")
 
-    col_v1, col_v2 = st.columns([1, 1])
+                st.markdown("#### 🩺 Diagnóstico rápido (limiares acadêmicos)")
+                diagnostic = []
+                if pd.notna(last["umidade"]):
+                    if last["umidade"] < 60 and last["chuva"] != 1:
+                        diagnostic.append("💧 Umidade abaixo de 60% sem chuva registrada: verificar necessidade de irrigação.")
+                    elif last["umidade"] > 80:
+                        diagnostic.append("💧 Umidade acima de 80%: verificar possível excesso hídrico.")
+                if pd.notna(last["ph"]) and not 5.5 <= last["ph"] <= 7:
+                    diagnostic.append("🧪 pH fora do intervalo demonstrativo de 5,5 a 7,0.")
+                for column, minimum in (("nitrogenio", 80), ("fosforo", 30), ("potassio", 100)):
+                    if pd.notna(last[column]) and last[column] < minimum:
+                        diagnostic.append(f"🌿 {SENSOR_LABELS[column][0]} abaixo da referência de estudo ({minimum} mg/kg).")
+                if diagnostic:
+                    for message in diagnostic:
+                        notice(message, "warning")
+                else:
+                    notice("Nenhum desvio identificado pelas regras demonstrativas na última leitura.", "success")
 
-    with col_v1:
-        st.markdown("#### Execução do Módulo de Visão Computacional")
-        st.caption("Comando: `python src/fase6_vision/detector.py`")
-        if st.button("🔍 Executar Inferência Visual no Lote"):
-            with st.spinner("Processando tensores neurais..."):
-                cmd = [PYTHON_EXEC, str(BASE_DIR / "src" / "fase6_vision" / "detector.py")]
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                st.code(res.stdout, language="text")
+                with st.expander("🧾 Qualidade e cobertura dos dados"):
+                    total_missing = int(df[list(SENSOR_LABELS)].isna().sum().sum())
+                    q1, q2, q3 = st.columns(3)
+                    q1.metric("Linhas válidas com data", len(df))
+                    q2.metric("Campos numéricos ausentes", total_missing)
+                    q3.metric("Grandezas disponíveis", len(SENSOR_LABELS))
+                    st.caption("Registros sem data válida são descartados na importação. Números inválidos são convertidos em valores ausentes.")
 
-    with col_v2:
-        st.markdown("#### Classes do Modelo Treinado")
-        st.info("• **Classe 0 (Garrafa):** Insumo Líquido / Defensivo Agrícola\n• **Classe 1 (Caneca):** Utensílio de Coleta de Amostras de Solo")
-        st.caption("Rede YOLOv5 customizada com 60 épocas de treinamento.")
+                st.markdown("#### Visão geral da irrigação")
+                pie = go.Figure(go.Pie(
+                    labels=["Irrigação ligada", "Irrigação desligada"],
+                    values=[int((df["irrigacao"] == 1).sum()), int((df["irrigacao"] == 0).sum())],
+                    hole=0.55, marker_colors=["#24b47e", "#d9973b"],
+                ))
+                pie.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0),
+                                  showlegend=True, paper_bgcolor=palette["surface"],
+                                  plot_bgcolor=palette["surface"],
+                                  font=dict(color=palette["text"]))
+                themed_chart(pie)
 
+                st.divider()
+                st.subheader("🔎 Explorador de sensores")
+                st.caption("Escolha uma ou várias grandezas para analisar. Cada gráfico mantém sua própria unidade.")
+                options = list(SENSOR_LABELS)
+                selected = st.multiselect(
+                    "Variáveis para análise", options=options,
+                    default=["umidade", "ph", "nitrogenio", "fosforo", "potassio"],
+                    format_func=lambda name: SENSOR_LABELS[name][0],
+                )
+                period = st.date_input(
+                    "Período de análise",
+                    value=(df["timestamp"].min().date(), df["timestamp"].max().date()),
+                    min_value=df["timestamp"].min().date(),
+                    max_value=df["timestamp"].max().date(),
+                )
+                filtered = df
+                if isinstance(period, (tuple, list)) and len(period) == 2:
+                    start, end = period
+                    filtered = df[(df["timestamp"].dt.date >= start) &
+                                  (df["timestamp"].dt.date <= end)]
+                st.caption(f"{len(filtered)} registros no período escolhido · Fonte: CSV histórico")
 
-# ─── ABA 6: FASE 7 — MENSAGERIA E ALERTAS CLOUD AWS (SNS) ─────────────────────
-with tab_aws:
-    st.markdown("### 🚨 Fase 7: Central de Alertas na Nuvem (Amazon SNS)")
-    st.write("Serviço de mensageria na AWS para notificação imediata de operadores da fazenda via E-mail e SMS.")
+                if not selected:
+                    notice("Selecione ao menos uma variável para visualizar os gráficos.")
+                elif filtered.empty:
+                    notice("Não há medições no período selecionado.", "warning")
+                else:
+                    for name in selected:
+                        label, unit = SENSOR_LABELS[name]
+                        values = filtered[name].dropna()
+                        if values.empty:
+                            notice(f"{label}: sem valores válidos no período.", "warning")
+                            continue
+                        st.markdown(f"#### {label}")
+                        x, y, z = st.columns(3)
+                        x.metric("Última medição no período", f"{values.iloc[-1]:.2f} {unit}".strip())
+                        y.metric("Média no período", f"{values.mean():.2f} {unit}".strip())
+                        z.metric("Mínimo / máximo", f"{values.min():.2f} / {values.max():.2f}")
+                        chart = px.line(filtered, x="timestamp", y=name,
+                                        markers=len(filtered) <= 70,
+                                        title=f"Histórico — {label}", labels={"timestamp":"Data e hora", name: label})
+                        if name in ("chuva", "irrigacao"):
+                            chart.update_traces(line_shape="hv")
+                            chart.update_yaxes(tickvals=[0, 1], range=[-0.1, 1.1])
+                        themed_chart(chart)
 
-    st.markdown(f"**Tópico Ativo:** `arn:aws:sns:us-east-1:608221021260:FarmTechAlertas` *(Região: US East - N. Virginia / Provisionado via AWS Academy)*")
+                with st.expander("📋 Ver dados detalhados do período"):
+                    themed_table(filtered[["timestamp", *selected]].tail(100))
 
-    with st.form("form_alerta_aws"):
-        f_origem = st.selectbox(
-            "Origem da Notificação:",
-            ["Sensores IoT de Solo (Setor Café A-12)", "Visão Computacional (Setor Armazém)", "Estação Meteorológica"]
-        )
-        f_nivel = st.select_slider("Nível de Severidade:", options=["Informativo", "Atenção", "Crítico"], value="Crítico")
-        f_diag = st.text_area("Diagnóstico Agronômico:", value="Déficit hídrico severo detectado: umidade do solo em 42% (abaixo do limiar mínimo de 60%).")
-        f_acao = st.text_input("Ação Corretiva Recomendada:", value="Acionar irrigação de emergência (volume 7.2 L/m²) e aplicar calcário dolomítico.")
-        
-        btn_enviar = st.form_submit_button("📤 Transmitir Alerta via Amazon SNS")
+                st.subheader("Recomendações a partir da última leitura")
+                module = ROOT / "src/fase4_ml/recomendacoes.py"
+                if module.exists():
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location("farmtech_recomendacoes", module)
+                    if spec and spec.loader:
+                        mod = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(mod)
+                        if hasattr(mod, "gerar_recomendacoes_agronomicas"):
+                            items = mod.gerar_recomendacoes_agronomicas(
+                                last["umidade"], last["ph"], last["nitrogenio"],
+                                last["fosforo"], last["potassio"], int(last["chuva"])
+                            )
+                            for item in items:
+                                st.write("-", item)
+                        else:
+                            notice("Módulo encontrado, mas a função de recomendações ainda não está disponível.")
+                else:
+                    notice("Aguardando integração do módulo de recomendações da Fase 4.")
+                st.caption("As recomendações são regras demonstrativas, não um modelo preditivo treinado.")
+        except (OSError, ValueError, KeyError) as exc:
+            notice(f"Não foi possível carregar a telemetria: {exc}", "error")
 
-        if btn_enviar:
-            from src.fase7_alerts.mensageria_aws import enviar_alerta_aws
-            with st.spinner("Publicando no Amazon SNS..."):
-                enviar_alerta_aws(f_origem, f_nivel, f_diag, f_acao)
-                st.success("✅ Alerta publicado com sucesso no Amazon SNS e transmitido aos e-mails assinados!")
-                st.json({
-                    "origem": f_origem,
-                    "severidade": f_nivel,
-                    "diagnostico": f_diag,
-                    "acao_corretiva": f_acao,
-                    "status": "Publicado com Sucesso"
-                })
+with tab_farm:
+    st.subheader("📐 Planejamento agrícola — Fase 1")
+    st.caption("Calculadora de cenários independente do cadastro oficial: nenhum dado é gravado.")
+    left, right = st.columns(2)
+    with left:
+        culture = st.radio("Cultura", ["Café (área retangular)", "Soja (pivô circular)"],
+                           horizontal=True)
+        if culture.startswith("Café"):
+            length = st.number_input("Comprimento (m)", min_value=0.1, value=100.0)
+            width = st.number_input("Largura (m)", min_value=0.1, value=50.0)
+            rows = st.number_input("Ruas de plantio", min_value=1, value=25, step=1)
+            dosage = st.number_input("Dosagem (mL por metro de rua)", min_value=0.0, value=100.0)
+            area = length * width
+            supply = length * rows * dosage / 1000
+        else:
+            radius = st.number_input("Raio do pivô (m)", min_value=0.1, value=80.0)
+            dosage = st.number_input("Dosagem (mL por m²)", min_value=0.0, value=50.0)
+            area = math.pi * radius**2
+            supply = area * dosage / 1000
+        x, y = st.columns(2)
+        x.metric("Área calculada", f"{area:,.1f} m²")
+        y.metric("Insumos estimados", f"{supply:,.1f} L")
+    with right:
+        st.markdown("#### Culturas cadastradas")
+        farm_csv = ROOT / "data/dados_fazenda.csv"
+        if farm_csv.exists():
+            try:
+                farm_df = pd.read_csv(farm_csv)
+                themed_table(farm_df)
+                if {"Cultura", "Insumo_L"}.issubset(farm_df.columns):
+                    themed_chart(px.bar(farm_df, x="Cultura", y="Insumo_L",
+                                        title="Insumos cadastrados (L)"))
+            except (OSError, ValueError) as exc:
+                notice(f"Não foi possível ler o cadastro: {exc}", "error")
+        else:
+            notice("Aguardando data/dados_fazenda.csv.")
 
-# ─── RODAPÉ INSTITUCIONAL ─────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown(
-    "<p style='text-align:center; color:#52606D; font-size:0.82rem;'>"
-    "FarmTech Solutions © 2026 — FIAP Inteligência Artificial · Fase 7: A Consolidação de um Sistema"
-    "</p>",
-    unsafe_allow_html=True
-)
+    st.markdown("#### Análise estatística em R")
+    r_script = ROOT / "src/fase1_planejamento/analise_estatistica.R"
+    if st.button("▶ Executar script R", disabled=not r_script.exists()):
+        st.session_state["result_r"] = execute_r(r_script)
+    if not r_script.exists():
+        st.caption("Aguardando o script R na pasta da Fase 1.")
+    if "result_r" in st.session_state:
+        r_code, r_output = st.session_state["result_r"]
+        notice("Análise R concluída" if r_code == 0 else "Não foi possível concluir a análise R",
+               "success" if r_code == 0 else "error")
+        with st.expander("Ver relatório R"):
+            themed_log(r_output)
+
+with tab_sim:
+    st.subheader("🧪 Simulador de cenários agrícolas — Fase 4")
+    st.caption("Análise hipotética com regras do módulo de recomendações; não é previsão de modelo treinado.")
+    a, b = st.columns(2)
+    with a:
+        sim_h = st.slider("Umidade (%)", 0.0, 100.0, 52.0)
+        sim_ph = st.slider("pH", 3.0, 10.0, 5.8, 0.1)
+        sim_n = st.slider("Nitrogênio (mg/kg)", 0.0, 200.0, 70.0)
+        sim_p = st.slider("Fósforo (mg/kg)", 0.0, 150.0, 25.0)
+        sim_k = st.slider("Potássio (mg/kg)", 0.0, 250.0, 85.0)
+        sim_rain = st.radio("Chuva", [0, 1], format_func=lambda v: "Sim" if v else "Não",
+                            horizontal=True)
+    with b:
+        st.markdown("#### Ações sugeridas")
+        rec_file = ROOT / "src/fase4_ml/recomendacoes.py"
+        if rec_file.exists():
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("farmtech_simulador", rec_file)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                for advice in module.gerar_recomendacoes_agronomicas(
+                    sim_h, sim_ph, sim_n, sim_p, sim_k, sim_rain
+                ):
+                    notice(advice)
+            except (ImportError, AttributeError, OSError, ValueError) as exc:
+                notice(f"Módulo de recomendações indisponível: {exc}", "error")
+        else:
+            notice("Aguardando o módulo de recomendações da Fase 4.", "warning")
+        st.caption("Valores e doses são apenas demonstrações acadêmicas.")
+
+with tab_services:
+    st.subheader("Central de operações")
+    st.caption("Execute os serviços e consulte seus resultados em painéis visuais. Logs técnicos continuam disponíveis para depuração.")
+    available = sum((ROOT / "src" / path).is_file() for _, path, _ in SERVICES)
+    a, b = st.columns(2)
+    a.metric("Serviços disponíveis", f"{available}/{len(SERVICES)}")
+    b.metric("Aguardando integração", len(SERVICES) - available)
+    for title, rel_path, stdin in SERVICES:
+        script = ROOT / "src" / rel_path
+        exists = script.is_file()
+        with st.expander(f"{'✅' if exists else '⏳'} {title}", expanded=False):
+            if not exists:
+                notice("Aguardando arquivo do integrante responsável.")
+            if st.button("▶ Executar e visualizar", key=rel_path, disabled=not exists,
+                         type="primary"):
+                with st.spinner("Executando..."):
+                    code, output = execute_service(script, stdin)
+                st.session_state[f"result_{rel_path}"] = (code, output)
+            result = st.session_state.get(f"result_{rel_path}")
+            if result is not None:
+                show_service_result(rel_path, *result)
+
+with tab_alerts:
+    st.subheader("🚨 Central de alertas — Fase 7")
+    st.caption("Monte uma mensagem de teste e visualize o conteúdo antes de qualquer publicação.")
+    with st.form("alert_preview"):
+        origin = st.selectbox("Origem", ["Sensores de solo", "Visão computacional", "Clima"])
+        severity = st.select_slider("Severidade", options=["Informativo", "Atenção", "Crítico"])
+        details = st.text_area("Diagnóstico", value="Umidade do solo abaixo do limiar demonstrativo.")
+        action = st.text_input("Ação sugerida", value="Verificar irrigação e inspecionar sensores.")
+        preview = st.form_submit_button("👁️ Pré-visualizar mensagem")
+    if preview:
+        module_path = ROOT / "src/fase7_alerts/mensageria_aws.py"
+        if module_path.exists():
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("farmtech_alert_preview", module_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                subject, body, sms = module.formatar_mensagem_alerta(
+                    origin, severity, details, action
+                )
+                st.write("**Assunto:**", subject)
+                st.text_area("Prévia de e-mail", body, height=290)
+                st.text_area("Prévia de SMS", sms, height=90)
+                notice("Prévia gerada localmente. Nenhuma mensagem foi enviada.", "success")
+            except (ImportError, AttributeError, OSError, ValueError) as exc:
+                notice(f"Não foi possível preparar a prévia: {exc}", "error")
+        else:
+            notice("Aguardando o módulo de mensageria do Integrante 5.", "warning")
+    notice("A publicação via SNS deve ser validada pelo responsável AWS. Use o botão de execução da Fase 7 na aba Serviços somente em ambiente autorizado.")
+    notice("Uma simulação ou resposta positiva de publish não comprova recebimento de e-mail/SMS.", "warning")
