@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-AWS_REGION = os.getenv("AWS_REGION", "sa-east-1")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")
-SNS_TOPIC_ARN = os.getenv("AWS_SNS_TOPIC_ARN", "arn:aws:sns:sa-east-1:123456789012:FarmTechAlertas")
+SNS_TOPIC_ARN = os.getenv("AWS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:608221021260:FarmTechAlertas")
 EMAIL_DESTINO = os.getenv("EMAIL_ALERTA_DESTINO", "operador.fazenda@farmtech.com.br")
 
 
