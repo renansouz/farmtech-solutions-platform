@@ -48,3 +48,10 @@ resultado_clima.txt
 
 # VS CODE
 .vscode/
+
+# Logs de controle de publicação SNS (não versionar histórico operacional)
+data/alertas_sns_enviados.json
+data/alertas_sns_enviados.json.tmp
+# Imagens/saídas locais de inferência
+models/
+outputs/

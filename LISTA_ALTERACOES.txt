@@ -1,0 +1,20 @@
+FarmTech Solutions — Fase 7 — arquivos adicionados ou modificados
+Base: farmtech-solutions-platform-feat-new_dashboard_streamlite.zip
+Os arquivos não listados foram preservados.
+
+.env.example
+.gitignore
+ENTREGA_PORTAL_ALUNO_MODELO.txt
+README.md
+docs/INTEGRACAO_FASE7.md
+requirements.txt
+src/dashboard/app.py
+src/fase3_database/conexao.py
+src/fase3_database/consultas.sql
+src/fase3_database/deteccoes_oracle.py
+src/fase3_database/ingestao_oracle.py
+src/fase3_database/schema.sql
+src/fase6_vision/detector.py
+src/fase7_alerts/mensageria_aws.py
+src/fase7_alerts/regras_alerta.py
+tests/test_integracao.py

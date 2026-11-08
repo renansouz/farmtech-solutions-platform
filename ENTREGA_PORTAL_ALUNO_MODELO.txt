@@ -1,0 +1,13 @@
+FIAP — FARMTECH SOLUTIONS — FASE 7
+
+Repositório GitHub PRIVADO (conceder acesso ao perfil fiap-tutoria):
+COLE_AQUI_URL_REAL_DO_REPOSITORIO
+
+Vídeo demonstrativo geral (YouTube NÃO LISTADO, máximo 10 minutos):
+COLE_AQUI_URL_REAL_DO_VIDEO
+
+Observações para a equipe (remover do TXT da entrega):
+- Coloque o link do vídeo também no README.md.
+- Confirme que o repositório é privado e que fiap-tutoria tem acesso.
+- Envie no Portal do Aluno apenas este TXT preenchido.
+- Não envie senhas, .env, dados privados nem tokens AWS.
