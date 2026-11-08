@@ -1,6 +1,4 @@
 <div align="center">
-  
-# FIAP - Faculdade de Informática e Administração Paulista
 
 # 🌱 FarmTech Solutions — Plataforma Integrada de Agricultura 4.0
 
@@ -34,7 +32,7 @@
 
 ---
 
-## 📜 Visão Geral 
+## 📜 Visão Geral
 
 A **FarmTech Solutions** nasceu como uma iniciativa de engenharia para enfrentar os maiores desafios do agronegócio moderno: **eficiência hídrica, precisão na aplicação de defensivos e previsibilidade de safra**.
 
