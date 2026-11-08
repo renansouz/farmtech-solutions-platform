@@ -1,14 +1,6 @@
-# FIAP - Faculdade de Informática e Administração Paulista
-
-<p align="center">
-<a href="https://www.fiap.com.br/">
-  <img src="https://raw.githubusercontent.com/fiap-tutoria/FIAP-PORTFOLIO-AI/main/assets/logo-fiap.png" 
-       alt="FIAP - Faculdade de Informática e Administração Paulista" 
-       width="35%">
-</a>
-</p>
-
 <div align="center">
+  
+# FIAP - Faculdade de Informática e Administração Paulista
 
 # 🌱 FarmTech Solutions — Plataforma Integrada de Agricultura 4.0
 
@@ -42,7 +34,7 @@
 
 ---
 
-## 📜 Visão Geral & Storytelling do Produto
+## 📜 Visão Geral 
 
 A **FarmTech Solutions** nasceu como uma iniciativa de engenharia para enfrentar os maiores desafios do agronegócio moderno: **eficiência hídrica, precisão na aplicação de defensivos e previsibilidade de safra**.
 
