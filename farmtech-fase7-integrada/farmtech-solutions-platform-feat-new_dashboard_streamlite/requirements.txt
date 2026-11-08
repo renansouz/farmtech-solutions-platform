@@ -1,0 +1,28 @@
+# --- Interface & Dashboard (Streamlit & Plotly) ---
+streamlit>=1.30.0
+plotly>=5.18.0
+
+# --- Manipulação de Dados & Visualização ---
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# --- Machine Learning & Preditivos ---
+scikit-learn>=1.3.0
+joblib>=1.3.0
+
+# --- Conexão de Banco de Dados & Ambiente ---
+oracledb>=2.0.0
+python-dotenv>=1.0.0
+
+# --- APIs & Rede ---
+requests>=2.31.0
+
+# --- Nuvem AWS & Mensageria (Fase 7) ---
+boto3>=1.34.0
+
+# --- Visão Computacional & Imagens ---
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+PyYAML>=6.0.0
