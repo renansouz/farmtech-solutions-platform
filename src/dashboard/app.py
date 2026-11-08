@@ -15,13 +15,15 @@ import streamlit as st
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 DATA = ROOT / "data" / "sensores_farmtech_v2.csv"
 SERVICES = [
     ("Fase 1 · Manejo de insumos", "fase1_planejamento/manejo_insumos.py", "2\n5\n"),
     ("Fase 2 · Clima/IoT", "fase2_iot/clima.py", None),
     ("Fase 3 · Oracle", "fase3_database/ingestao_oracle.py", None),
     ("Fase 4 · Recomendações", "fase4_ml/recomendacoes.py", None),
-    ("Fase 6 · Visão computacional", "fase6_vision/detector.py", None),
+    ("Fase 6 · Visão computacional (aba dedicada)", "fase6_vision/detector.py", None),
     ("Fase 7 · Teste local de alertas", "fase7_alerts/mensageria_aws.py", None),
 ]
 REQUIRED = {"timestamp", "umidade", "ph", "nitrogenio", "fosforo", "potassio", "chuva", "irrigacao"}
@@ -48,17 +50,18 @@ def read_telemetry(path: str):
     return frame.dropna(subset=["timestamp"]).sort_values("timestamp")
 
 
-def execute_service(script: Path, stdin: str | None = None):
+def execute_service(script: Path, stdin: str | None = None, *,
+                    args: list[str] | None = None, timeout: int = 25):
     """Executa apenas os módulos conhecidos, com limite de tempo e saída capturada."""
     try:
         result = subprocess.run(
-            [sys.executable, str(script)], input=stdin, text=True,
-            capture_output=True, cwd=ROOT, timeout=25,
+            [sys.executable, str(script), *(args or [])], input=stdin, text=True,
+            capture_output=True, cwd=ROOT, timeout=timeout,
             env={**os.environ, "PYTHONPATH": str(ROOT)},
         )
         return result.returncode, (result.stdout + "\n" + result.stderr).strip()
     except subprocess.TimeoutExpired:
-        return -1, "Tempo limite de 25 segundos atingido. Execute esse módulo pelo terminal para investigar."
+        return -1, f"Tempo limite de {timeout} segundos atingido. Execute esse módulo pelo terminal para investigar."
     except OSError as exc:
         return -1, f"Falha ao iniciar: {exc}"
 
@@ -284,7 +287,7 @@ def show_service_result(rel_path: str, code: int, output: str):
             themed_log(output)
         return
 
-    notice("Processamento concluído", "success")
+    notice("Execução finalizada; confira abaixo se houve persistência/publicação real.")
     if "fase1_planejamento" in rel_path:
         file = ROOT / "data/dados_fazenda.csv"
         if file.exists():
@@ -301,17 +304,16 @@ def show_service_result(rel_path: str, code: int, output: str):
         else:
             notice("Relatório executado; CSV de culturas ainda não encontrado para visualização.")
     elif "fase3_database" in rel_path:
-        notice("Este módulo pode validar apenas o CSV local. Confira no log se a conexão Oracle foi realmente estabelecida.")
+        if "[ORACLE REAL]" in output:
+            notice("Leituras importadas por MERGE e consultadas no Oracle real.", "success")
+        else:
+            notice("CSV local validado; esta execução NÃO confirmou gravação no Oracle.", "warning")
         if DATA.exists():
             table = read_telemetry(str(DATA))
             a, b, c = st.columns(3)
-            a.metric("Registros locais", len(table))
+            a.metric("Registros no CSV", len(table))
             b.metric("Umidade média", f"{table['umidade'].mean():.1f}%")
-            c.metric("Acionamentos registrados", int(table["irrigacao"].sum()))
-        if "Conectado ao Oracle" in output:
-            notice("O script informou conexão com o Oracle.", "success")
-        else:
-            notice("Conexão real ao Oracle não confirmada nesta execução.", "warning")
+            c.metric("Acionamentos no CSV", int(table["irrigacao"].sum()))
     elif "fase4_ml" in rel_path:
         lines = [line.strip().lstrip("• ") for line in output.splitlines()
                  if line.strip().startswith(("•", "✅", "⚠️", "💧", "🧪", "🌿", "🌧️"))]
@@ -323,22 +325,9 @@ def show_service_result(rel_path: str, code: int, output: str):
             st.write("A saída do módulo está disponível no log técnico.")
         st.caption("O módulo atual utiliza regras agronômicas, não inferência de modelo treinado.")
     elif "fase6_vision" in rel_path:
-        results = re.findall(r"Classe:\s*(\S+)\s*\|\s*Confiança:\s*([\d.,]+)%", output)
-        if results:
-            st.subheader("Objetos identificados")
-            table = pd.DataFrame(results, columns=["Classe", "Confiança (%)"])
-            table["Confiança (%)"] = table["Confiança (%)"].str.replace(",", ".").astype(float)
-            a, b = st.columns(2)
-            a.metric("Detecções apresentadas", len(table))
-            b.metric("Maior confiança", f"{table['Confiança (%)'].max():.1f}%")
-            themed_table(table)
-            themed_chart(px.bar(table, x="Classe", y="Confiança (%)", color="Classe",
-                                range_y=[0, 100], title="Confiança por detecção"))
-        else:
-            notice("O serviço não retornou detecções no formato esperado.")
-        notice("O detector.py recebido gera detecções simuladas; não é inferência YOLO real.", "warning")
+        notice("Para inferência YOLO real, abra a aba 'Visão computacional' e envie uma imagem.")
     elif "fase7_alerts" in rel_path:
-        if "Alerta publicado com sucesso no Amazon SNS" in output:
+        if "SNS MessageId:" in output:
             notice("O serviço informou publicação no SNS. Confirme o recebimento no destino.", "success")
         else:
             notice("Não há confirmação de publicação real: resultado local ou simulado.", "warning")
@@ -362,7 +351,7 @@ st.markdown("""
   <p>Central agrícola integrada · Sensores, planejamento, análise de cenários e serviços · FIAP Fase 7</p>
 </div>
 """, unsafe_allow_html=True)
-st.caption("Versão da dashboard: F7-20261108-R11 · logs nativos · caminho legível")
+st.caption("Fase 7 · integração Oracle + YOLO + SNS · arquivo histórico de sensores")
 with st.sidebar:
     logo = ROOT / "docs/assets/logo.png"
     if logo.exists():
@@ -375,8 +364,8 @@ with st.sidebar:
     st.divider()
     notice("Os sensores exibem dados históricos locais até a integração IoT definitiva.")
 
-tab_data, tab_farm, tab_sim, tab_services, tab_alerts = st.tabs([
-    "📊 Sensores", "🌾 Planejamento", "🧪 Simular cenários", "⚙️ Serviços", "🚨 Alertas"
+tab_data, tab_farm, tab_sim, tab_vision, tab_services, tab_alerts = st.tabs([
+    "📊 Sensores", "🌾 Planejamento", "🧪 Simular cenários", "📷 Visão computacional", "⚙️ Serviços", "🚨 Alertas"
 ])
 
 with tab_data:
@@ -516,6 +505,23 @@ with tab_data:
         except (OSError, ValueError, KeyError) as exc:
             notice(f"Não foi possível carregar a telemetria: {exc}", "error")
 
+    st.divider()
+    with st.expander("🗄️ Consultar medições persistidas no Oracle (Fase 3)"):
+        st.caption("Consulta ao banco REAL; não usa o CSV local para gerar a tabela de resultados.")
+        if st.button("🔎 Buscar últimas 10 leituras no Oracle"):
+            try:
+                from src.fase3_database.conexao import conectar_oracle
+                from src.fase3_database.ingestao_oracle import listar_ultimas_leituras
+                with conectar_oracle() as conn:
+                    linhas_oracle = listar_ultimas_leituras(conn, 10)
+                if linhas_oracle:
+                    themed_table(pd.DataFrame(linhas_oracle))
+                    notice(f"{len(linhas_oracle)} registro(s) consultado(s) diretamente no Oracle.", "success")
+                else:
+                    notice("Conexão efetuada, mas tabela sem leituras.", "warning")
+            except Exception as exc:
+                notice(f"Consulta Oracle falhou: {exc}", "error")
+
 with tab_farm:
     st.subheader("📐 Planejamento agrícola — Fase 1")
     st.caption("Calculadora de cenários independente do cadastro oficial: nenhum dado é gravado.")
@@ -597,6 +603,82 @@ with tab_sim:
             notice("Aguardando o módulo de recomendações da Fase 4.", "warning")
         st.caption("Valores e doses são apenas demonstrações acadêmicas.")
 
+with tab_vision:
+    st.subheader("📷 Inferência real — YOLOv5 (Fase 6)")
+    st.caption("Modelo do notebook Fase 6: garrafa/caneca, imagem 320 px, limiar ajustável. Não utiliza dados simulados.")
+    from src.fase6_vision.detector import analisar_imagem, configuracao_modelo
+    from src.fase3_database.conexao import conectar_oracle, garantir_tabelas
+    from src.fase3_database.deteccoes_oracle import salvar_deteccoes, listar_deteccoes
+
+    try:
+        caminho_pesos, caminho_repo = configuracao_modelo()
+        notice(f"Modelo configurado: {caminho_pesos.name} · YOLOv5 local disponível", "success")
+        disponivel_modelo = True
+    except FileNotFoundError as exc:
+        notice(str(exc), "warning")
+        disponivel_modelo = False
+
+    arquivo_upload = st.file_uploader("Imagem de campo para classificação de objetos",
+                                      type=["jpg", "jpeg", "png", "bmp", "webp"],
+                                      key="visao_upload")
+    minimo_conf = st.slider("Confiança mínima da detecção", 0.05, 0.95, 0.25, 0.05)
+    gravar_oracle = st.checkbox("Persistir caixas detectadas no Oracle", key="gravar_deteccoes_oracle")
+    if st.button("▶ Analisar imagem com YOLOv5", type="primary",
+                 disabled=not (disponivel_modelo and arquivo_upload)):
+        import tempfile
+        try:
+            if arquivo_upload.size > 15 * 1024 * 1024:
+                raise ValueError("Envie uma imagem de até 15 MB.")
+            with tempfile.TemporaryDirectory(prefix="farmtech_upload_") as temp:
+                extensao = Path(arquivo_upload.name).suffix.lower()
+                origem = Path(temp) / f"imagem{extensao}"
+                origem.write_bytes(arquivo_upload.getvalue())
+                with st.spinner("Executando YOLOv5 real com os pesos treinados..."):
+                    resultado = analisar_imagem(origem, confianca_minima=minimo_conf)
+            resultado["arquivo"] = Path(arquivo_upload.name).name
+            resultado["gravado_oracle"] = None
+            st.session_state["visao_resultado"] = resultado
+            if gravar_oracle:
+                with conectar_oracle() as conn:
+                    garantir_tabelas(conn)
+                    gravadas = salvar_deteccoes(
+                        conn, resultado["arquivo"], resultado["deteccoes"], resultado["modelo"]
+                    )
+                resultado["gravado_oracle"] = gravadas
+        except Exception as exc:
+            notice(f"Não foi possível concluir a análise/persistência: {exc}", "error")
+    if "visao_resultado" in st.session_state:
+        resultado = st.session_state["visao_resultado"]
+        st.subheader("Resultado da inferência")
+        x, y = st.columns(2)
+        x.metric("Objetos identificados", len(resultado["deteccoes"]))
+        y.metric("Modelo utilizado", resultado["modelo"])
+        if resultado["gravado_oracle"] is not None:
+            notice(f"{resultado['gravado_oracle']} detecção(ões) gravada(s) no Oracle real.", "success")
+        st.image(resultado["imagem_anotada"], caption=resultado["arquivo"],
+                 use_container_width=True)
+        if resultado["deteccoes"]:
+            themed_table(pd.DataFrame([
+                {"Classe": d["classe"], "Confiança (%)": round(d["confianca"] * 100, 2),
+                 "Box (x1,y1,x2,y2)": str(d["box"])} for d in resultado["deteccoes"]
+            ]))
+        else:
+            notice("O modelo executou corretamente, mas não identificou objetos acima do limiar.")
+        st.download_button("Baixar imagem anotada", data=resultado["imagem_anotada"],
+                           file_name=f"resultado_{resultado['arquivo']}",
+                           mime="image/png" if resultado["arquivo"].lower().endswith(".png") else "image/jpeg")
+
+    if st.button("🔎 Consultar histórico de detecções Oracle"):
+        try:
+            with conectar_oracle() as conn:
+                registros = listar_deteccoes(conn, limite=30)
+            if registros:
+                themed_table(pd.DataFrame(registros))
+            else:
+                notice("Tabela acessível, mas ainda não há detecções armazenadas.")
+        except Exception as exc:
+            notice(f"Consulta Oracle indisponível: {exc}", "error")
+
 with tab_services:
     st.subheader("Central de operações")
     st.caption("Execute os serviços e consulte seus resultados em painéis visuais. Logs técnicos continuam disponíveis para depuração.")
@@ -610,7 +692,10 @@ with tab_services:
         with st.expander(f"{'✅' if exists else '⏳'} {title}", expanded=False):
             if not exists:
                 notice("Aguardando arquivo do integrante responsável.")
-            if st.button("▶ Executar e visualizar", key=rel_path, disabled=not exists,
+            if "fase6_vision" in rel_path:
+                notice("Envie uma imagem na aba 'Visão computacional'. O detector não fabrica resultados.")
+            if st.button("▶ Executar e visualizar", key=rel_path,
+                         disabled=(not exists or "fase6_vision" in rel_path),
                          type="primary"):
                 with st.spinner("Executando..."):
                     code, output = execute_service(script, stdin)
@@ -620,7 +705,49 @@ with tab_services:
                 show_service_result(rel_path, *result)
 
 with tab_alerts:
-    st.subheader("🚨 Central de alertas — Fase 7")
+    st.subheader("🚨 Alertas automáticos baseados no CSV de sensores")
+    from src.fase7_alerts.regras_alerta import avaliar_leitura, ultima_leitura_csv
+    from src.fase7_alerts.mensageria_aws import ultima_leitura_oracle
+    fonte_alerta = st.radio(
+        "Fonte dos dados para avaliar e enviar alertas",
+        ["CSV histórico", "Oracle (Fase 3)"], horizontal=True,
+        key="sns_fonte_dados",
+    )
+    fonte_codigo = "oracle" if fonte_alerta.startswith("Oracle") else "csv"
+    try:
+        leitura_alertas = (ultima_leitura_oracle() if fonte_codigo == "oracle"
+                           else ultima_leitura_csv(DATA))
+        eventos_alerta = avaliar_leitura(leitura_alertas)
+        st.caption(f"Última leitura da fonte {fonte_alerta}: {leitura_alertas['timestamp']} — atualização conforme a origem.")
+        if eventos_alerta:
+            for evento in eventos_alerta:
+                notice(f"{evento['nivel']}: {evento['detalhes']} Ação: {evento['acao_corretiva']}", "warning")
+            st.caption(f"{len(eventos_alerta)} alerta(s) gerado(s) automaticamente por regras verificáveis.")
+        else:
+            notice("Nenhuma condição de alerta na última leitura do CSV.", "success")
+        confirmar_envio = st.checkbox(
+            "Confirmo que configurei o tópico SNS real e autorizo enviar os alertas por e-mail/SMS assinados.",
+            key="sns_confirmacao",
+        )
+        if st.button("📨 Publicar alertas detectados no AWS SNS", type="primary",
+                     disabled=not (eventos_alerta and confirmar_envio)):
+            with st.spinner("Publicando eventos elegíveis no SNS..."):
+                codigo, log = execute_service(
+                    ROOT / "src/fase7_alerts/mensageria_aws.py",
+                    args=["--enviar", "--fonte", fonte_codigo], timeout=45
+                )
+            st.session_state["alerta_resultado_real"] = (codigo, log)
+        if "alerta_resultado_real" in st.session_state:
+            codigo, log = st.session_state["alerta_resultado_real"]
+            notice("Processo SNS concluído; verifique a entrega na caixa postal." if codigo == 0
+                   else "Falha no processamento do SNS; consulte o log.",
+                   "success" if codigo == 0 else "error")
+            themed_log(log)
+        st.caption("Eventos já publicados ficam registrados em data/alertas_sns_enviados.json para evitar reenvio.")
+    except Exception as exc:
+        notice(f"Falha ao avaliar os dados de sensores: {exc}", "error")
+    st.divider()
+    st.subheader("✉️ Prévia de mensagem personalizada (não envia)")
     st.caption("Monte uma mensagem de teste e visualize o conteúdo antes de qualquer publicação.")
     with st.form("alert_preview"):
         origin = st.selectbox("Origem", ["Sensores de solo", "Visão computacional", "Clima"])
@@ -647,5 +774,5 @@ with tab_alerts:
                 notice(f"Não foi possível preparar a prévia: {exc}", "error")
         else:
             notice("Aguardando o módulo de mensageria do Integrante 5.", "warning")
-    notice("A publicação via SNS deve ser validada pelo responsável AWS. Use o botão de execução da Fase 7 na aba Serviços somente em ambiente autorizado.")
+    notice("Publicação real requer tópico SNS configurado e confirmação no botão de envio acima.")
     notice("Uma simulação ou resposta positiva de publish não comprova recebimento de e-mail/SMS.", "warning")

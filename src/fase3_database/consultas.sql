@@ -33,3 +33,16 @@ SELECT ts_leitura, umidade, ph, nitrogenio, fosforo, potassio
 FROM SENSORES_FARMTECH_IOT
 WHERE nitrogenio < 80 OR fosforo < 30 OR potassio < 100
 ORDER BY ts_leitura DESC;
+
+-- 5. Histórico recente de inferências YOLOv5 persistido no Oracle
+SELECT id, execucao_id, ts_deteccao, arquivo_imagem, classe,
+       confianca, x1, y1, x2, y2, modelo
+FROM DETECCOES_FARMTECH
+ORDER BY ts_deteccao DESC
+FETCH FIRST 30 ROWS ONLY;
+
+-- 6. Contagem de detecções reais por classe
+SELECT classe, COUNT(*) AS total, ROUND(AVG(confianca) * 100, 2) AS confianca_media_pct
+FROM DETECCOES_FARMTECH
+GROUP BY classe
+ORDER BY total DESC;
