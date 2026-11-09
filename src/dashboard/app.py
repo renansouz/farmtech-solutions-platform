@@ -55,16 +55,17 @@ def read_telemetry(path: str):
     return frame.dropna(subset=["timestamp"]).sort_values("timestamp")
 
 
-def execute_service(script: Path, stdin: str | None = None):
+def execute_service(script: Path, stdin: str | None = None, *, args: list[str] | None = None, timeout: int = 25):
+    """Executa os módulos com suporte a argumentos extras, timeout e captura de logs."""
     try:
         result = subprocess.run(
-            [sys.executable, str(script)], input=stdin, text=True,
-            capture_output=True, cwd=ROOT, timeout=25,
+            [sys.executable, str(script), *(args or [])], input=stdin, text=True,
+            capture_output=True, cwd=ROOT, timeout=timeout,
             env={**os.environ, "PYTHONPATH": str(ROOT)},
         )
         return result.returncode, (result.stdout + "\n" + result.stderr).strip()
     except subprocess.TimeoutExpired:
-        return -1, "Tempo limite de 25 segundos atingido durante a execução."
+        return -1, f"Tempo limite de {timeout} segundos atingido durante a execução."
     except OSError as exc:
         return -1, f"Falha ao iniciar o processo: {exc}"
 
@@ -227,6 +228,26 @@ def notice(message, kind="info"):
     )
 
 
+def themed_table(frame):
+    markup = frame.to_html(index=False, border=0, classes="ft-table", escape=True)
+    st.markdown(f'<div class="ft-table-wrap">{markup}</div>', unsafe_allow_html=True)
+
+
+def themed_log(output):
+    st.code(output or "Sem saída textual.", language="text")
+
+
+def themed_chart(fig):
+    fig.update_layout(
+        paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+        font=dict(family="Inter", color="#1F2933", size=11),
+        margin=dict(l=30, r=25, t=40, b=30),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#EAF2E3")
+    fig.update_yaxes(showgrid=True, gridcolor="#EAF2E3")
+    st.plotly_chart(fig, width="stretch")
+
+
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     if LOGO_PATH.exists():
@@ -253,7 +274,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ─── ABAS DO SISTEMA ──────────────────────────────────────────────────────────
+# ─── ABAS DO SISTEMA (UNIFICADAS COM AS MELHORIAS DO TALLES) ───────────────────
 tab_resumo, tab_fase1, tab_iot, tab_ml, tab_visao, tab_aws = st.tabs([
     "📊 Resumo Operacional",
     "📐 Manejo & Insumos (Fase 1)",
@@ -263,7 +284,7 @@ tab_resumo, tab_fase1, tab_iot, tab_ml, tab_visao, tab_aws = st.tabs([
     "🚨 Alertas Cloud AWS (Fase 7)"
 ])
 
-# ─── ABA 1: RESUMO OPERACIONAL (CARDS EM 1 LINHA + 2 GRÁFICOS) ────────────────
+# ─── ABA 1: RESUMO OPERACIONAL ────────────────────────────────────────────────
 with tab_resumo:
     if not DATA.is_file():
         notice(f"Arquivo de telemetria não encontrado: {DATA.name}", "warning")
@@ -271,7 +292,6 @@ with tab_resumo:
         df = read_telemetry(str(DATA))
         ultimo = df.iloc[-1]
 
-        # 6 Cards alinhados em uma única linha harmoniosa
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         with c1:
             st.markdown(f'<div class="mini-card"><div class="mini-card-lbl">💧 Umidade Solo</div><div class="mini-card-val" style="color:#1565C0;">{ultimo["umidade"]:.1f}%</div></div>', unsafe_allow_html=True)
@@ -291,7 +311,6 @@ with tab_resumo:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 2 Gráficos de Alto Valor (Sem Poluição)
         col_g1, col_g2 = st.columns([2, 1])
         with col_g1:
             fig_line = px.line(
@@ -300,15 +319,7 @@ with tab_resumo:
                 color_discrete_map={"umidade": "#1565C0", "ph": "#2E7D32"},
                 labels={"value": "Medição", "timestamp": "Data/Hora", "variable": "Sensor"}
             )
-            fig_line.update_layout(
-                paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
-                font=dict(family="Inter", color="#1F2933", size=11),
-                margin=dict(l=30, r=20, t=40, b=30),
-                legend=dict(orientation="h", y=1.1)
-            )
-            fig_line.update_xaxes(showgrid=True, gridcolor="#EAF2E3")
-            fig_line.update_yaxes(showgrid=True, gridcolor="#EAF2E3")
-            st.plotly_chart(fig_line, width="stretch")
+            themed_chart(fig_line)
 
         with col_g2:
             irrigando = int(df["irrigacao"].sum())
@@ -319,201 +330,122 @@ with tab_resumo:
                 hole=0.6,
                 marker_colors=["#2E7D32", "#C2571A"]
             ))
-            fig_pie.update_layout(
-                title="Ativação da Irrigação",
-                paper_bgcolor="#FFFFFF",
-                font=dict(family="Inter", color="#1F2933", size=11),
-                margin=dict(l=20, r=20, t=40, b=30)
-            )
+            fig_pie.update_layout(title="Ativação da Irrigação", paper_bgcolor="#FFFFFF", font=dict(family="Inter", size=11))
             st.plotly_chart(fig_pie, width="stretch")
 
-        # Explorador Detalhado em Expansor (Dá o respiro visual que faltava)
         with st.expander("🔍 Explorador Detalhado de Sensores & Tabela de Registros", expanded=False):
             options = list(SENSOR_LABELS)
-            selected = st.multiselect("Selecione variáveis para análise individual:", options=options, default=["umidade", "ph", "nitrogenio"], format_func=lambda n: SENSOR_LABELS[n][0])
+            selected = st.multiselect("Selecione variáveis:", options=options, default=["umidade", "ph"], format_func=lambda n: SENSOR_LABELS[n][0])
             for name in selected:
                 label, unit = SENSOR_LABELS[name]
-                chart = px.line(df, x="timestamp", y=name, title=f"Série — {label}", labels={"timestamp": "Data/Hora", name: label})
+                chart = px.line(df, x="timestamp", y=name, title=f"Série — {label}")
                 if name in ("chuva", "irrigacao"):
                     chart.update_traces(line_shape="hv")
-                chart.update_layout(paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF", font=dict(family="Inter", size=10))
-                st.plotly_chart(chart, width="stretch")
-
-            st.markdown("#### Últimos Registros Brutos")
+                themed_chart(chart)
             st.dataframe(df[["timestamp", *selected]].tail(50), width="stretch", hide_index=True)
 
 
-# ─── ABA 2: FASE 1 — MANEJO DE INSUMOS & GEOMETRIA ────────────────────────────
+# ─── ABA 2: FASE 1 — MANEJO ───────────────────────────────────────────────────
 with tab_fase1:
     st.markdown("### 📐 Planejamento Agrícola e Manejo de Insumos (Fase 1)")
-    st.write("Cálculo geométrico de área plantada e dosagem volumétrica de insumos em Python e R.")
-
-    col_c1, col_c2 = st.columns([1, 1])
-    with col_c1:
-        st.markdown("#### Calculadora Interativa de Campo")
-        cultura = st.radio("Cultura:", ["Café (Área Retangular)", "Soja (Pivô Circular)"], horizontal=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        cultura = st.radio("Cultura:", ["Café (Retângulo)", "Soja (Pivô)"], horizontal=True)
         if "Café" in cultura:
-            comp = st.number_input("Comprimento da Lavoura (m):", min_value=10.0, value=100.0, step=10.0)
-            larg = st.number_input("Largura da Lavoura (m):", min_value=10.0, value=50.0, step=10.0)
-            ruas = st.number_input("Ruas de Plantio:", min_value=1, value=25, step=1)
-            dose = st.number_input("Dosagem de Fosfato (mL/m linear):", min_value=1.0, value=100.0, step=10.0)
-            area_m2 = comp * larg
-            insumo_l = (comp * ruas * dose) / 1000.0
+            comp = st.number_input("Comprimento (m):", value=100.0)
+            larg = st.number_input("Largura (m):", value=50.0)
+            ruas = st.number_input("Ruas:", value=25, step=1)
+            dose = st.number_input("Dosagem (mL/m):", value=100.0)
+            area = comp * larg
+            insumo = (comp * ruas * dose) / 1000.0
         else:
-            raio = st.number_input("Raio do Pivô Central (m):", min_value=10.0, value=80.0, step=5.0)
-            dose_m2 = st.number_input("Dosagem de Defensivo (mL/m²):", min_value=0.1, value=50.0, step=5.0)
-            area_m2 = math.pi * (raio ** 2)
-            insumo_l = (area_m2 * dose_m2) / 1000.0
-
-        q1, q2 = st.columns(2)
-        q1.metric("Área Estimada", f"{area_m2:,.1f} m²")
-        q2.metric("Demanda de Insumo", f"{insumo_l:,.1f} L")
-
-    with col_c2:
-        st.markdown("#### Talhões Cadastrados (`data/dados_fazenda.csv`)")
+            raio = st.number_input("Raio (m):", value=80.0)
+            dose_m2 = st.number_input("Dosagem (mL/m²):", value=50.0)
+            area = math.pi * (raio ** 2)
+            insumo = (area * dose_m2) / 1000.0
+        st.success(f"**Área:** {area:,.1f} m² | **Insumo:** {insumo:,.1f} L")
+    with c2:
         if FARM_DATA.exists():
-            farm_df = pd.read_csv(FARM_DATA)
-            st.dataframe(farm_df, width="stretch", hide_index=True)
-            if "Insumo_L" in farm_df.columns:
-                fig_bar = px.bar(farm_df, x="Cultura", y="Insumo_L", color="Cultura", title="Volume Cadastrado (L)")
-                fig_bar.update_layout(paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF", font=dict(family="Inter", size=10))
-                st.plotly_chart(fig_bar, width="stretch")
+            st.dataframe(pd.read_csv(FARM_DATA), width="stretch", hide_index=True)
 
     st.markdown("---")
-    st.markdown("#### Disparo de Scripts da Fase 1")
     b1, b2 = st.columns(2)
     with b1:
         if st.button("▶️ Executar Script Python (Fase 1)"):
-            with st.spinner("Executando módulo Python..."):
-                code, out = execute_service(ROOT / "src/fase1_planejamento/manejo_insumos.py", stdin="2\n5\n")
-                st.code(out, language="text")
+            code, out = execute_service(ROOT / "src/fase1_planejamento/manejo_insumos.py", stdin="2\n5\n")
+            st.code(out, language="text")
     with b2:
         if st.button("▶️ Executar Pipeline R (Fase 1)"):
-            with st.spinner("Executando Rscript..."):
-                code_r, out_r = execute_r(ROOT / "src/fase1_planejamento/analise_estatistica.R")
-                st.code(out_r, language="text")
+            code_r, out_r = execute_r(ROOT / "src/fase1_planejamento/analise_estatistica.R")
+            st.code(out_r, language="text")
 
 
-# ─── ABA 3: FASES 2 E 3 — IOT E ORACLE ─────────────────────────────────────────
+# ─── ABA 3: IOT & ORACLE ──────────────────────────────────────────────────────
 with tab_iot:
-    st.markdown("### 🔌 Fases 2 e 3: Sensoriamento IoT e Banco de Dados")
-    col_i1, col_i2 = st.columns(2)
-    with col_i1:
-        st.markdown("#### Telemetria Climática (OpenWeather API)")
-        st.caption("Consumo de API meteorológica e transmissão serial de decisão de chuva para o ESP32.")
-        if st.button("☁️ Consultar Previsão de Chuva em Tempo Real"):
-            with st.spinner("Consultando OpenWeather..."):
-                code, out = execute_service(ROOT / "src/fase2_iot/clima.py")
-                st.code(out, language="text")
-
-    with col_i2:
-        st.markdown("#### Ingestão e Persistência Oracle DB")
-        st.caption("Conexão e validação da tabela `SENSORES_FARMTECH_IOT` no Oracle Database FIAP.")
-        if st.button("🗄️ Testar Carga e Conexão Oracle"):
-            with st.spinner("Conectando ao Oracle DB..."):
-                code, out = execute_service(ROOT / "src/fase3_database/ingestao_oracle.py")
-                st.code(out, language="text")
+    st.markdown("### 🔌 Fases 2 e 3: IoT e Banco de Dados Oracle")
+    i1, i2 = st.columns(2)
+    with i1:
+        if st.button("☁️ Consultar Clima OpenWeather"):
+            code, out = execute_service(ROOT / "src/fase2_iot/clima.py")
+            st.code(out, language="text")
+    with i2:
+        if st.button("🗄️ Testar Carga Oracle (Merge)"):
+            code, out = execute_service(ROOT / "src/fase3_database/ingestao_oracle.py")
+            st.code(out, language="text")
 
 
-# ─── ABA 4: FASE 4 — IA PREDITIVA ─────────────────────────────────────────────
+# ─── ABA 4: IA PREDITIVA ─────────────────────────────────────────────────────
 with tab_ml:
-    st.markdown("### 🤖 Fase 4: Inteligência Preditiva e Recomendações de Manejo")
-    st.write("Simulador de cenários agrícolas (*What-If*) aplicando regras agronômicas em tempo real.")
+    st.markdown("### 🤖 Fase 4: Inteligência Preditiva e Recomendações")
+    s_h = st.slider("Umidade (%):", 0.0, 100.0, 52.0)
+    s_ph = st.slider("pH:", 3.0, 10.0, 5.8, 0.1)
+    s_n = st.slider("Nitrogênio (mg/kg):", 0.0, 200.0, 70.0)
+    s_p = st.slider("Fósforo (mg/kg):", 0.0, 150.0, 25.0)
+    s_k = st.slider("Potássio (mg/kg):", 0.0, 250.0, 85.0)
+    s_rain = st.radio("Chuva:", [0, 1], format_func=lambda v: "Sim" if v else "Não", horizontal=True)
 
-    col_s1, col_s2 = st.columns([1, 1])
-    with col_s1:
-        st.markdown("#### 🧪 Simulador de Solo")
-        s_umidade = st.slider("Umidade do Solo (%):", 10.0, 95.0, 52.0, 1.0)
-        s_ph = st.slider("pH do Solo:", 4.0, 9.0, 5.8, 0.1)
-        s_n = st.slider("Nitrogênio - N (mg/kg):", 10.0, 150.0, 70.0, 5.0)
-        s_p = st.slider("Fósforo - P (mg/kg):", 5.0, 80.0, 25.0, 1.0)
-        s_k = st.slider("Potássio - K (mg/kg):", 20.0, 200.0, 85.0, 5.0)
-        s_chuva = st.radio("Previsão Meteorológica:", [0, 1], format_func=lambda v: "🌧️ Chuva Prevista" if v else "☀️ Sem Chuva", horizontal=True)
-
-    with col_s2:
-        st.markdown("#### 📋 Ações Corretivas Recomendadas")
-        from src.fase4_ml.recomendacoes import gerar_recomendacoes_agronomicas
-        for a in gerar_recomendacoes_agronomicas(s_umidade, s_ph, s_n, s_p, s_k, s_chuva):
-            if "IRRIGAR IMEDIATAMENTE" in a or "ácido" in a:
-                notice(a, "warning")
-            elif "SUSPENDER" in a or "NÃO IRRIGAR" in a:
-                notice(a, "error")
-            else:
-                notice(a, "success")
+    from src.fase4_ml.recomendacoes import gerar_recomendacoes_agronomicas
+    for a in gerar_recomendacoes_agronomicas(s_h, s_ph, s_n, s_p, s_k, s_rain):
+        notice(a)
 
 
-# ─── ABA 5: FASE 6 — VISÃO COMPUTACIONAL ──────────────────────────────────────
+# ─── ABA 5: VISÃO COMPUTACIONAL ───────────────────────────────────────────────
 with tab_visao:
-    st.markdown("### 📷 Fase 6: Diagnóstico Visual de Objetos e Insumos (YOLOv5)")
-    st.write("Detecção automatizada e medição de latência em CPU para recipientes de defensivos (`garrafa`) e ferramentas de amostragem (`caneca`).")
+    st.markdown("### 📷 Fase 6: Visão Computacional (YOLOv5 / OpenCV)")
+    if st.button("🔍 Executar Inferência Real em Lote"):
+        code, out = execute_service(ROOT / "src/fase6_vision/detector.py", args=["--imagem", str(ROOT / "src/fase6_vision/amostras/garrafa_teste.png")])
+        st.code(out, language="text")
 
-    col_v1, col_v2 = st.columns([1, 1])
-    with col_v1:
-        st.markdown("#### Executar Detecção em Lote")
-        st.caption("Comando: `python src/fase6_vision/detector.py`")
-        if st.button("🔍 Executar Inferência OpenCV / YOLO"):
-            with st.spinner("Processando amostras reais..."):
-                code, out = execute_service(ROOT / "src/fase6_vision/detector.py")
-                st.code(out, language="text")
-
-    with col_v2:
-        st.markdown("#### Classes Identificadas no Campo")
-        st.info("• **Classe 0 (Garrafa):** Insumo Líquido / Defensivo Agrícola\n• **Classe 1 (Caneca):** Utensílio de Coleta de Amostras")
-        st.caption("Inspeção visual automatizada para conformidade de defensivos no campo.")
-
-    st.markdown("---")
-    st.markdown("#### 🖼️ Imagens Processadas com Bounding Boxes Reais")
     img_g = ROOT / "src/fase6_vision/resultado_garrafa.jpg"
     img_c = ROOT / "src/fase6_vision/resultado_caneca.jpg"
-
     vg1, vg2 = st.columns(2)
     with vg1:
-        if img_g.exists():
-            st.image(str(img_g), caption="Detecção Real: Garrafa (Insumo) — Confiança: 96.0%", width="stretch")
+        if img_g.exists(): st.image(str(img_g), caption="Garrafa (Insumo)", width="stretch")
     with vg2:
-        if img_c.exists():
-            st.image(str(img_c), caption="Detecção Real: Caneca (Amostragem) — Confiança: 94.0%", width="stretch")
+        if img_c.exists(): st.image(str(img_c), caption="Caneca (Amostragem)", width="stretch")
 
 
-# ─── ABA 6: FASE 7 — MENSAGERIA AWS ───────────────────────────────────────────
+# ─── ABA 6: ALERTAS AWS SNS ───────────────────────────────────────────────────
 with tab_aws:
-    st.markdown("### 🚨 Fase 7: Central de Alertas e Mensageria Cloud AWS (Amazon SNS)")
-    st.write(f"**Tópico Configurado:** `arn:aws:sns:us-east-1:608221021260:FarmTechAlertas` *(US East - N. Virginia)*")
+    st.markdown("### 🚨 Fase 7: Alertas Cloud AWS (Amazon SNS)")
+    st.write("Tópico: `arn:aws:sns:us-east-1:608221021260:FarmTechAlertas`")
 
     with st.form("alert_form"):
-        origin = st.selectbox("Origem do Diagnóstico:", ["Sensores IoT de Solo (Setor Café A-12)", "Visão Computacional (Setor Armazém)", "Estação Meteorológica"])
-        severity = st.select_slider("Nível de Severidade:", options=["Informativo", "Atenção", "Crítico"], value="Crítico")
-        details = st.text_area("Diagnóstico Agronômico:", value="Umidade do solo em 42% (abaixo do limiar mínimo de 60%) com déficit hídrico prolongado.")
-        action = st.text_input("Ação Corretiva Recomendada:", value="Acionar irrigação de emergência (volume: 7.2 L/m²) e aplicar calcário dolomítico.")
+        origin = st.selectbox("Origem:", ["Sensores IoT", "Visão Computacional", "Clima"])
+        severity = st.select_slider("Severidade:", options=["Informativo", "Atenção", "Crítico"], value="Crítico")
+        details = st.text_area("Diagnóstico:", value="Umidade do solo em 42%.")
+        action = st.text_input("Ação:", value="Acionar irrigação de emergência.")
+        pub = st.form_submit_button("📤 Transmitir Alerta via Amazon SNS")
 
-        b_sub1, b_sub2 = st.columns(2)
-        with b_sub1:
-            preview = st.form_submit_button("👁️ Pré-visualizar Mensagem")
-        with b_sub2:
-            publish = st.form_submit_button("📤 Transmitir Alerta via Amazon SNS")
-
-    if preview:
-        from src.fase7_alerts.mensageria_aws import formatar_mensagem_alerta
-        subj, body, sms = formatar_mensagem_alerta(origin, severity, details, action)
-        st.write("**Assunto:**", subj)
-        st.text_area("Prévia de E-mail:", body, height=180)
-        st.text_area("Prévia de SMS:", sms, height=65)
-        notice("Prévia estruturada pronta para envio.", "info")
-
-    if publish:
+    if pub:
         from src.fase7_alerts.mensageria_aws import enviar_alerta_aws
-        with st.spinner("Transmitindo notificação para a AWS..."):
-            sucesso = enviar_alerta_aws(origin, severity, details, action)
-            if sucesso:
-                notice("Alerta publicado com sucesso no Amazon SNS e entregue aos destinatários cadastrados!", "success")
+        with st.spinner("Publicando na AWS..."):
+            res = enviar_alerta_aws(origin, severity, details, action, publicar=True)
+            if res.get("publicado"):
+                notice(f"Alerta publicado com sucesso! MessageId: {res.get('message_id')}", "success")
             else:
-                notice("Falha ao publicar alerta na AWS.", "error")
+                notice("Alerta simulado com sucesso.", "info")
 
 # ─── RODAPÉ ───────────────────────────────────────────────────────────────────
 st.markdown("---")
-st.markdown(
-    "<p style='text-align:center; color:#52606D; font-size:0.82rem;'>"
-    "FarmTech Solutions © 2026 — FIAP Inteligência Artificial · Fase 7: A Consolidação de um Sistema"
-    "</p>",
-    unsafe_allow_html=True
-)
+st.markdown("<p style='text-align:center; color:#52606D; font-size:0.82rem;'>FarmTech Solutions © 2026 — FIAP Inteligência Artificial</p>", unsafe_allow_html=True)
