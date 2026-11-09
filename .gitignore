@@ -45,3 +45,6 @@ runs/
 # Saídas e relatórios locais temporários
 *.log
 resultado_clima.txt
+
+# VS CODE
+.vscode/
