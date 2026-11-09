@@ -1,12 +1,3 @@
-# FIAP - Faculdade de Informática e Administração Paulista
-
-<p align="center">
-<a href="https://www.fiap.com.br/">
-  <img src="https://raw.githubusercontent.com/fiap-tutoria/FIAP-PORTFOLIO-AI/main/assets/logo-fiap.png" 
-       alt="FIAP - Faculdade de Informática e Administração Paulista" 
-       width="35%">
-</a>
-</p>
 
 <div align="center">
 
