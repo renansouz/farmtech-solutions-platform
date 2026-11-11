@@ -397,7 +397,7 @@ Conforme as diretrizes oficiais de avaliação da FIAP, as apresentações prát
 
 | Entrega / Escopo | Conteúdo Demonstrado | Link de Acesso |
 | :--- | :--- | :---: |
-| **Plataforma Integrada FarmTech Solutions (Fase 7 — Obrigatório)** | Demonstração de ponta a ponta: navegação pelo Dashboard executivo Streamlit, disparo dos módulos das Fases 1 a 6, telemetria de solo, persistência relacional no Oracle DB, detecção visual com OpenCV e publicação de alertas em tempo real no Amazon SNS. | [▶️ **Assistir Vídeo Geral**](COLE_AQUI_O_LINK_DO_VIDEO_1) |
+| **Plataforma Integrada FarmTech Solutions (Fase 7 — Obrigatório)** | Demonstração de ponta a ponta: navegação pelo Dashboard executivo Streamlit, disparo dos módulos das Fases 1 a 6, telemetria de solo, persistência relacional no Oracle DB, detecção visual com OpenCV e publicação de alertas em tempo real no Amazon SNS. | [▶️ **Assistir Vídeo Geral**](https://www.youtube.com/watch?v=XtJhUZaUhTc) |
 | **Otimização via Algoritmos Genéticos (Desafio Ir Além 2)** | Apresentação do módulo de computação evolutiva: resolução da Mochila Binária 0/1 com cota de 2.500L, ciclo evolutivo autoral, comparação experimental Torneio ($k=3$) vs Roleta, estudo de sensibilidade da mutação e alocação ótima dos talhões. | [▶️ **Assistir Vídeo Ir Além 2**](https://www.youtube.com/watch?v=Vdl7mW-q17g) |
 
 > **Nota de Auditoria:** Os links acima também estão espelhados no arquivo de submissão oficial `ENTREGA_FASE7.txt` para avaliação da banca.
