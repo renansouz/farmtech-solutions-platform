@@ -391,6 +391,19 @@ python IR-ALEM/algoritmo_genetico.py
 
 ---
 
+## 📹 Demonstrações em Vídeo (YouTube)
+
+Conforme as diretrizes oficiais de avaliação da FIAP, as apresentações práticas da solução integrada e do desafio opcional foram publicadas no YouTube sob visibilidade **Não Listado (Unlisted)**:
+
+| Entrega / Escopo | Conteúdo Demonstrado | Link de Acesso |
+| :--- | :--- | :---: |
+| **Plataforma Integrada FarmTech Solutions (Fase 7 — Obrigatório)** | Demonstração de ponta a ponta: navegação pelo Dashboard executivo Streamlit, disparo dos módulos das Fases 1 a 6, telemetria de solo, persistência relacional no Oracle DB, detecção visual com OpenCV e publicação de alertas em tempo real no Amazon SNS. | [▶️ **Assistir Vídeo Geral**](COLE_AQUI_O_LINK_DO_VIDEO_1) |
+| **Otimização via Algoritmos Genéticos (Desafio Ir Além 2)** | Apresentação do módulo de computação evolutiva: resolução da Mochila Binária 0/1 com cota de 2.500L, ciclo evolutivo autoral, comparação experimental Torneio ($k=3$) vs Roleta, estudo de sensibilidade da mutação e alocação ótima dos talhões. | [▶️ **Assistir Vídeo Ir Além 2**](https://www.youtube.com/watch?v=Vdl7mW-q17g) |
+
+> **Nota de Auditoria:** Os links acima também estão espelhados no arquivo de submissão oficial `ENTREGA_FASE7.txt` para avaliação da banca.
+
+---
+
 ## 📋 Licença
 
 <img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/cc.svg?ref=chooser-v1"><img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/by.svg?ref=chooser-v1"><p xmlns:cc="http://creativecommons.org/ns#" xmlns:dct="http://purl.org/dc/terms/"><a property="dct:title" rel="cc:attributionURL" href="https://github.com/fiap-tutoria/FIAP-PORTFOLIO-AI">TEMPLATE - FIAP PORTFÓLIO AI</a> por <a rel="cc:attributionURL dct:creator" property="cc:attributionName" href="https://fiap.com.br">FIAP</a> está licenciado sobre <a href="http://creativecommons.org/licenses/by/4.0/?ref=chooser-v1" target="_blank" rel="license noopener noreferrer" style="display:inline-block;">Attribution 4.0 International</a>.</p>
