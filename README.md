@@ -206,7 +206,7 @@ O módulo presente em **`IR-ALEM/`** adapta o **Problema da Mochila Binária 0/1
 <div align="center">
 
 #### Ciclo Evolutivo Autoral do Algoritmo Genético:
-![Ciclo Evolutivo](IR-ALEM/figura_autoral_algoritmo_genetico.png)
+![Ciclo Evolutivo](IR-ALEM/Ciclo-Evolutivo-do-Algoritmo-Genético.png)
 
 #### Curvas de Convergência (Torneio vs Roleta) e Pressão Seletiva:
 ![Convergência de Gerações](IR-ALEM/convergencia_geracoes.png)
